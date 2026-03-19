@@ -1,6 +1,0 @@
-Пароль от аккаунта leluk@elitegas.ru для WebDAW
-
-y6LgiKbsBj9IdLE5TvsH
-
-VK_CLOUD_EMAIL=leluk@elitegas.ru
-VK_CLOUD_PASSWORD=y6LgiKbsBj9IdLE5TvsH
