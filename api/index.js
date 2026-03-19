@@ -21,39 +21,35 @@ const client = createClient(
     }
 );
 
-// Функция-помощник для микро-пауз
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// 🛡 Бронебойная функция для создания папок с повторными попытками
 async function createDirWithRetry(path) {
     if (await client.exists(path) === false) {
         await client.createDirectory(path);
-        await sleep(500); // Даем Mail.ru полсекунды на "осознание", что папка создана
+        await sleep(500); 
     }
 }
 
-// 🛡 Бронебойная функция для загрузки файлов (если Mail.ru выдает 504, пробуем снова)
 async function uploadFileWithRetry(path, buffer, retries = 3) {
     for (let i = 0; i < retries; i++) {
         try {
             await client.putFileContents(path, buffer);
-            return; // Успешно загрузили - выходим
+            return; 
         } catch (error) {
             console.log(`⚠️ Облако тормозит (Попытка ${i + 1} из ${retries}). Ждем 2 сек...`);
-            if (i === retries - 1) throw error; // Если попытки закончились - сдаемся
-            await sleep(2000); // Ждем 2 секунды перед повтором
+            if (i === retries - 1) throw error; 
+            await sleep(2000); 
         }
     }
 }
 
 app.post('/api/upload', upload.any(), async (req, res) => {
     try {
-        console.log('--- Обработка новой заявки (Бронебойный режим) ---');
+        console.log('--- Обработка новой заявки ---');
         
         const { clientType, docType, fullName, companyName, licensePlate, conversionType } = req.body;
         const files = req.files;
 
-        // Формируем дату и имена
         const now = new Date();
         const Y = now.getFullYear();
         const M = String(now.getMonth() + 1).padStart(2, '0');
@@ -73,14 +69,10 @@ app.post('/api/upload', upload.any(), async (req, res) => {
         const clientPath = `${rootPath}/${mainFolderName}`;
         const finalPath = `${clientPath}/${subFolderName}`;
 
-        console.log(`Создаю структуру папок...`);
-
-        // Создаем папки аккуратно, с паузами
         await createDirWithRetry(rootPath);
         await createDirWithRetry(clientPath);
         await createDirWithRetry(finalPath);
 
-        // --- ГЕНЕРАЦИЯ WORD ФАЙЛА ---
         const doc = new Document({
             sections: [{
                 children: [
@@ -92,9 +84,7 @@ app.post('/api/upload', upload.any(), async (req, res) => {
 
         const buffer = await Packer.toBuffer(doc);
         await uploadFileWithRetry(`${finalPath}/описание.docx`, buffer);
-        console.log('✅ Файл описание.docx создан');
 
-        // --- ЗАГРУЗКА ФОТОГРАФИЙ ---
         const russianNames = { 'passport': 'ПАСПОРТ', 'snils': 'СНИЛС', 'sts': 'СТС', 'pts': 'ПТС' };
         const counters = {};
 
@@ -104,21 +94,16 @@ app.post('/api/upload', upload.any(), async (req, res) => {
             const extension = file.originalname.split('.').pop();
             const newFileName = `${categoryBase}_${counters[categoryBase]}.${extension}`;
             
-            console.log(`Отправляю в облако: ${newFileName}`);
-            // Используем нашу функцию с повторными попытками
             await uploadFileWithRetry(`${finalPath}/${newFileName}`, file.buffer);
-            console.log(`✅ Загружен: ${newFileName}`);
         }
 
-        console.log('🚀 Заявка успешно сохранена!');
         res.json({ success: true });
 
     } catch (error) {
-        console.error('❌ Финальная Ошибка:', error);
+        console.error('❌ Ошибка:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
 
-app.listen(3000, () => {
-    console.log(`✅ Сервер REGDOC запущен (Защита от 504 Timeout активна)`);
-});
+// ИЗМЕНЕНИЕ ДЛЯ VERCEL: Убрали app.listen() и добавили export default app
+export default app;
