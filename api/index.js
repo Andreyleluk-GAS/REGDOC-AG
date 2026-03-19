@@ -45,18 +45,33 @@ async function uploadFileWithRetry(path, buffer, retries = 3) {
 
 app.post('/api/upload', upload.any(), async (req, res) => {
     try {
-        console.log('--- Обработка новой заявки ---');
+        console.log('--- Обработка новой заявки (Время Екатеринбурга) ---');
         
         const { clientType, docType, fullName, companyName, licensePlate, conversionType } = req.body;
         const files = req.files;
 
+        // --- ЛОГИКА ВРЕМЕНИ ЕКАТЕРИНБУРГА (UTC+5) ---
         const now = new Date();
-        const Y = now.getFullYear();
-        const M = String(now.getMonth() + 1).padStart(2, '0');
-        const D = String(now.getDate()).padStart(2, '0');
-        const HH = String(now.getHours()).padStart(2, '0');
-        const mm = String(now.getMinutes()).padStart(2, '0');
+        const ekbTime = new Intl.DateTimeFormat('ru-RU', {
+            timeZone: 'Asia/Yekaterinburg',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        }).formatToParts(now);
+
+        const getValue = (type) => ekbTime.find(p => p.type === type).value;
+
+        const Y = getValue('year');
+        const M = getValue('month');
+        const D = getValue('day');
+        const HH = getValue('hour');
+        const mm = getValue('minute');
+
         const timestamp = `${Y}.${M}.${D}_${HH}.${mm}`;
+        // ------------------------------------------
 
         const rawName = clientType === 'legal' ? companyName : fullName;
         const formattedName = rawName.trim().replace(/\s+/g, '_');
@@ -105,5 +120,4 @@ app.post('/api/upload', upload.any(), async (req, res) => {
     }
 });
 
-// ИЗМЕНЕНИЕ ДЛЯ VERCEL: Убрали app.listen() и добавили export default app
 export default app;
