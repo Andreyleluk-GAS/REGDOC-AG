@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Check, ChevronRight, User, Briefcase, FileSignature, FileCheck2, Camera, Upload, CheckCircle2, Loader2, FileText } from 'lucide-react';
+// Добавили иконку Paperclip (скрепка)
+import { Check, ChevronRight, User, Briefcase, FileSignature, FileCheck2, Camera, Paperclip, Loader2, FileText } from 'lucide-react';
 import imageCompression from 'browser-image-compression';
 
 const steps = [
@@ -57,6 +58,7 @@ export default function RegistrationFlow() {
   };
 
   const handleFileChange = async (e, category) => {
+    // Получаем файлы (их может быть несколько из скрепки или один с камеры)
     const selectedFiles = Array.from(e.target.files);
     if (selectedFiles.length === 0) return;
 
@@ -71,6 +73,7 @@ export default function RegistrationFlow() {
     try {
       const processedFiles = await Promise.all(
         selectedFiles.map(async (file) => {
+          // 1. ПРОВЕРКА PDF (лимит 8 МБ, без сжатия)
           if (file.type === 'application/pdf') {
             const sizeInMB = file.size / (1024 * 1024);
             if (sizeInMB > 8) {
@@ -80,9 +83,11 @@ export default function RegistrationFlow() {
             return file;
           }
           
+          // 2. СЖАТИЕ ФОТОГРАФИЙ (любых: из галереи или снятых на камеру)
           if (file.type.startsWith('image/')) {
             try {
               const compressedBlob = await imageCompression(file, options);
+              // Важно: возвращаем File с оригинальным именем, чтобы сервер правильно назвал папку
               return new File([compressedBlob], file.name, { type: file.type });
             } catch (err) {
               console.error('Ошибка сжатия картинки:', err);
@@ -97,6 +102,10 @@ export default function RegistrationFlow() {
       const validFiles = processedFiles.filter(f => f !== null);
 
       setFiles(prev => ({ ...prev, [category]: [...prev[category], ...validFiles] }));
+      
+      // Сбрасываем значение input, чтобы можно было выбрать тот же файл повторно
+      e.target.value = '';
+
     } catch (error) {
       console.error('Общая ошибка обработки:', error);
       alert('Произошла ошибка при обработке файлов.');
@@ -124,12 +133,13 @@ export default function RegistrationFlow() {
     
     Object.keys(files).forEach(category => {
       files[category].forEach(file => {
+        // Мы отправляем сжатые файлы, сервер их просто сохраняет
         submitData.append(category, file);
       });
     });
 
     try {
-      // ИЗМЕНЕНИЕ ЗДЕСЬ: Теперь путь относительный, специально для Vercel
+      // Используем относительный путь для Vercel
       const response = await fetch('/api/upload', {
         method: 'POST',
         body: submitData,
@@ -139,10 +149,10 @@ export default function RegistrationFlow() {
         alert("Ваша заявка и документы приняты в работу!");
         window.location.reload(); 
       } else {
-        alert("Ошибка при отправке данных на сервер.");
+        alert("Ошибка при отправке данных на сервер. Проверьте логи.");
       }
     } catch (error) {
-      alert("⚠️ Сервер не отвечает. Попробуйте еще раз.");
+      alert("⚠️ Сервер не отвечает. Попробуйте еще раз позже.");
     } finally {
       setIsSubmitting(false);
     }
@@ -154,10 +164,11 @@ export default function RegistrationFlow() {
       {isCompressing && (
         <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center rounded-3xl">
           <Loader2 className="w-10 h-10 text-brandGreen animate-spin mb-3" />
-          <p className="text-slate-700 font-semibold animate-pulse">Обработка файлов...</p>
+          <p className="text-slate-700 font-semibold animate-pulse">Обработка и сжатие...</p>
         </div>
       )}
 
+      {/* Шапка прогресса */}
       <div className="bg-slate-50 p-4 border-b border-slate-100 flex justify-between px-8 sm:px-12">
         {steps.map((s) => (
           <div key={s.id} className="flex flex-col items-center gap-1">
@@ -199,6 +210,7 @@ export default function RegistrationFlow() {
         {currentStep === 4 && (
           <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2">
             <h3 className="font-bold text-lg text-slate-800 mb-2">Загрузите фотографии или PDF</h3>
+            {/* Используем обновленный UploadCard */}
             <UploadCard title="Паспорт собственника" desc="2 разворота: главная + актуальная прописка" files={files.passport} onUpload={e => handleFileChange(e, 'passport')} onRemove={i => removeFile('passport', i)} />
             <UploadCard title="СНИЛС" desc="Лицевая сторона документа" files={files.snils} onUpload={e => handleFileChange(e, 'snils')} onRemove={i => removeFile('snils', i)} />
             <UploadCard title="СТС" desc="Обе стороны (пластиковое свидетельство)" files={files.sts} onUpload={e => handleFileChange(e, 'sts')} onRemove={i => removeFile('sts', i)} />
@@ -221,6 +233,7 @@ export default function RegistrationFlow() {
           </div>
         )}
 
+        {/* Кнопки навигации */}
         <div className="mt-8 flex gap-3">
           {currentStep > 1 && (
             <button 
@@ -291,20 +304,37 @@ function Input({ label, value, onChange, onInput, placeholder, isMono }) {
   );
 }
 
+// 👇 ОБНОВЛЕННЫЙ КОМПОНЕНТ UploadCard СЛОГИКОЙ СКРЕПКИ И КАМЕРЫ
 function UploadCard({ title, desc, files, onUpload, onRemove }) {
   return (
     <div className="border border-slate-200 rounded-2xl p-4 bg-slate-50/40">
-      <div className="flex justify-between items-start mb-3">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-3 mb-3">
         <div>
           <div className="font-bold text-slate-800 text-sm leading-none">{title}</div>
           <div className="text-[10px] text-slate-400 uppercase font-bold mt-1 tracking-tight">{desc}</div>
         </div>
-        <label className="bg-white p-2.5 rounded-xl shadow-sm border border-slate-100 cursor-pointer text-brandGreen hover:scale-110 active:scale-95 transition-all">
-          <Camera size={20} />
-          <input type="file" multiple className="hidden" onChange={onUpload} accept="image/*,.pdf" />
-        </label>
+
+        {/* Контейнер для кнопок действий */}
+        <div className="flex items-center gap-2 flex-shrink-0">
+
+          {/* 📎 КНОПКА 1: СКРЕПКА (Проводник / Файлы / Галерея) - РАБОТАЕТ ВЕЗДЕ */}
+          <label className="bg-white p-2.5 rounded-xl shadow-sm border border-slate-100 cursor-pointer text-slate-500 hover:text-brandGreen hover:scale-105 active:scale-95 transition-all flex items-center justify-center">
+            <Paperclip size={20} />
+            {/* multiple позволяет выбрать несколько фото, accept берет и фото и PDF */}
+            <input type="file" multiple className="hidden" onChange={onUpload} accept="image/*,.pdf" />
+          </label>
+
+          {/* 📷 КНОПКА 2: ФОТОКАМЕРА (Нативный фотоаппарат) - ТОЛЬКО ДЛЯ МОБИЛЬНЫХ (hidden на sm: и больше) */}
+          <label className="sm:hidden bg-white p-2.5 rounded-xl shadow-sm border border-slate-100 cursor-pointer text-brandGreen hover:scale-105 active:scale-95 transition-all flex items-center justify-center">
+            <Camera size={20} />
+            {/* capture="environment" заставляет телефон сразу открыть заднюю камеру в режиме фото */}
+            <input type="file" className="hidden" onChange={onUpload} accept="image/*" capture="environment" />
+          </label>
+
+        </div>
       </div>
       
+      {/* Список загруженных файлов */}
       {files.length > 0 ? (
         <div className="flex flex-wrap gap-2 mt-2">
           {files.map((f, i) => (
