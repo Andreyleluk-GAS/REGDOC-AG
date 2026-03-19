@@ -71,7 +71,6 @@ export default function RegistrationFlow() {
     try {
       const processedFiles = await Promise.all(
         selectedFiles.map(async (file) => {
-          // 1. ПРОВЕРКА PDF (Увеличен лимит до 8 МБ)
           if (file.type === 'application/pdf') {
             const sizeInMB = file.size / (1024 * 1024);
             if (sizeInMB > 8) {
@@ -81,7 +80,6 @@ export default function RegistrationFlow() {
             return file;
           }
           
-          // 2. СЖАТИЕ ФОТОГРАФИЙ
           if (file.type.startsWith('image/')) {
             try {
               const compressedBlob = await imageCompression(file, options);
@@ -96,7 +94,6 @@ export default function RegistrationFlow() {
         })
       );
 
-      // Убираем пустые элементы (если файл был отклонен)
       const validFiles = processedFiles.filter(f => f !== null);
 
       setFiles(prev => ({ ...prev, [category]: [...prev[category], ...validFiles] }));
@@ -132,7 +129,8 @@ export default function RegistrationFlow() {
     });
 
     try {
-      const response = await fetch('http://localhost:3000/api/upload', {
+      // ИЗМЕНЕНИЕ ЗДЕСЬ: Теперь путь относительный, специально для Vercel
+      const response = await fetch('/api/upload', {
         method: 'POST',
         body: submitData,
       });
@@ -144,7 +142,7 @@ export default function RegistrationFlow() {
         alert("Ошибка при отправке данных на сервер.");
       }
     } catch (error) {
-      alert("⚠️ Сервер не отвечает. Убедитесь, что команда 'node server.js' запущена в терминале.");
+      alert("⚠️ Сервер не отвечает. Попробуйте еще раз.");
     } finally {
       setIsSubmitting(false);
     }
