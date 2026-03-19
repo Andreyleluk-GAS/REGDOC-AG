@@ -18,7 +18,7 @@ function App() {
             </p>
           </div>
           <div className="bg-slate-200/60 text-slate-500 px-3 py-1.5 rounded-lg text-xs font-bold tracking-wider">
-            WEB VERSION
+            LIVE VERSION
           </div>
         </header>
 
