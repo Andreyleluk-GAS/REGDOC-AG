@@ -31,22 +31,13 @@ app.get('/api/check-plate', async (req, res) => {
         if (await client.exists(rootPath) === false) return res.json({ found: false });
         const items = await client.getDirectoryContents(rootPath);
         
-        // --- СТРОГО ЛОКАЛЬНАЯ ПРАВКА ---
-        // Заменили .includes() на строгое равенство (===) извлеченного номера
         const folder = items.find(i => {
             if (i.type !== 'directory') return false;
-            
-            // Проверка для нового формата: [Дата][ФИО][Номер]
             const match = i.basename.match(/\[.*?\]\[.*?\]\[(.*?)\]/);
-            if (match) {
-                return normalizePlate(match[1]) === searchPlate;
-            }
-            
-            // Проверка для старого формата (до введения скобок): ..._Номер
+            if (match) return normalizePlate(match[1]) === searchPlate;
             const oldParts = i.basename.split('_');
             return normalizePlate(oldParts[oldParts.length - 1]) === searchPlate;
         });
-        // -------------------------------
 
         if (folder) {
             const match = folder.basename.match(/\[.*?\]\[(.*?)\]\[.*?\]/);
@@ -73,7 +64,8 @@ app.get('/api/check-plate', async (req, res) => {
                     });
                 }
             }
-            return res.json({ found: true, fullName: extractedName, existingFiles, hasDescription });
+            // ДОБАВЛЕНО: возвращаем оригинальное имя папки, чтобы фронтенд знал, куда грузить
+            return res.json({ found: true, fullName: extractedName, existingFiles, hasDescription, folderName: folder.basename });
         }
         res.json({ found: false });
     } catch (error) { res.status(500).json({ error: error.message }); }
@@ -82,82 +74,96 @@ app.get('/api/check-plate', async (req, res) => {
 async function createDirWithRetry(path) {
     if (await client.exists(path) === false) {
         await client.createDirectory(path);
-        await sleep(500); 
+        await sleep(300); 
     }
 }
 
 async function uploadFileWithRetry(path, buffer) {
     for (let i = 0; i < 3; i++) {
-        try { await client.putFileContents(path, buffer); return; } catch (e) { await sleep(2000); }
+        try { await client.putFileContents(path, buffer); return; } catch (e) { await sleep(1000); }
     }
 }
 
+// НОВАЯ ЛОГИКА: Пошаговая обработка запросов
 app.post('/api/upload', upload.any(), async (req, res) => {
     try {
-        const { clientType, docType, fullName, companyName, licensePlate, conversionType, updateDescription } = req.body;
+        const { step, folderName, clientType, docType, fullName, companyName, licensePlate, conversionType, updateDescription } = req.body;
         
-        const now = new Date();
-        const ekb = new Intl.DateTimeFormat('ru-RU', {timeZone: 'Asia/Yekaterinburg', year:'numeric', month:'2-digit', day:'2-digit'}).formatToParts(now);
-        const getV = (t) => ekb.find(p => p.type === t).value;
-        const datePart = `[${getV('year')}.${getV('month')}.${getV('day')}]`;
-
-        const rawName = clientType === 'legal' ? companyName : fullName;
-        const namePart = `[${rawName.trim().replace(/\s+/g, '_')}]`;
-        const platePart = `[${normalizePlate(licensePlate)}]`;
-        
-        const mainFolderName = `${datePart}${namePart}${platePart}`;
-        const subFolderName = docType === 'pz' ? 'Для ПЗ' : 'Для ПБ';
-        
-        const rootPath = `/RegDoc_Заявки`;
-        const clientPath = `${rootPath}/${mainFolderName}`;
-        const finalPath = `${clientPath}/${subFolderName}`;
-
-        await createDirWithRetry(rootPath);
-        await createDirWithRetry(clientPath);
-        await createDirWithRetry(finalPath);
-
-        if (updateDescription !== 'false') {
-            const doc = new Document({sections: [{children: [new Paragraph({children: [new TextRun({text: "Тип переоборудования:", bold: true, size: 28})]}) , new Paragraph({children: [new TextRun({text: conversionType || "", size: 24})]})]}]});
-            const docBuf = await Packer.toBuffer(doc);
-            await uploadFileWithRetry(`${finalPath}/описание.docx`, docBuf);
+        // ШАГ 1: Создание корневой папки клиента
+        if (step === 'main_folder') {
+            const now = new Date();
+            const ekb = new Intl.DateTimeFormat('ru-RU', {timeZone: 'Asia/Yekaterinburg', year:'numeric', month:'2-digit', day:'2-digit'}).formatToParts(now);
+            const getV = (t) => ekb.find(p => p.type === t).value;
+            const datePart = `[${getV('year')}.${getV('month')}.${getV('day')}]`;
+            const rawName = clientType === 'legal' ? companyName : fullName;
+            const namePart = `[${rawName.trim().replace(/\s+/g, '_')}]`;
+            const platePart = `[${normalizePlate(licensePlate)}]`;
+            
+            const newFolderName = `${datePart}${namePart}${platePart}`;
+            await createDirWithRetry(`/RegDoc_Заявки`);
+            await createDirWithRetry(`/RegDoc_Заявки/${newFolderName}`);
+            
+            return res.json({ success: true, folderName: newFolderName });
         }
 
-        const russianNames = { 'passport': 'ПАСПОРТ', 'snils': 'СНИЛС', 'sts': 'СТС', 'pts': 'ПТС' };
-        
-        let existingFileNames = [];
-        if (await client.exists(finalPath)) {
-            const existingItems = await client.getDirectoryContents(finalPath);
-            existingFileNames = existingItems.filter(i => i.type === 'file').map(i => i.basename.toUpperCase());
+        // Базовые пути для остальных шагов
+        const clientPath = `/RegDoc_Заявки/${folderName}`;
+        const finalPath = `${clientPath}/${docType === 'pz' ? 'Для ПЗ' : 'Для ПБ'}`;
+
+        // УДАЛЕНИЕ ПАПКИ (Если пользователь отменил заявку)
+        if (step === 'delete_folder') {
+            if (await client.exists(clientPath)) {
+                await client.deleteFile(clientPath); 
+            }
+            return res.json({ success: true });
         }
 
-        const counters = { 'ПАСПОРТ': 0, 'СНИЛС': 0, 'СТС': 0, 'ПТС': 0, 'ФАЙЛ': 0 };
+        // ШАГ 2: Создание подпапки (ПЗ или ПБ)
+        if (step === 'sub_folder') {
+            await createDirWithRetry(finalPath);
+            return res.json({ success: true });
+        }
 
-        existingFileNames.forEach(name => {
-            Object.keys(counters).forEach(cat => {
+        // ШАГ 3: Загрузка ОДНОГО файла
+        if (step === 'single_file') {
+            const file = req.files[0];
+            const russianNames = { 'passport': 'ПАСПОРТ', 'snils': 'СНИЛС', 'sts': 'СТС', 'pts': 'ПТС' };
+            const cat = russianNames[file.fieldname] || 'ФАЙЛ';
+
+            let existingFileNames = [];
+            if (await client.exists(finalPath)) {
+                const existingItems = await client.getDirectoryContents(finalPath);
+                existingFileNames = existingItems.filter(i => i.type === 'file').map(i => i.basename.toUpperCase());
+            }
+
+            let maxNum = 0;
+            existingFileNames.forEach(name => {
                 if (name.startsWith(cat + '_')) {
                     const parts = name.split('_');
                     if (parts.length > 1) {
                         const num = parseInt(parts[1]);
-                        if (!isNaN(num) && num > counters[cat]) {
-                            counters[cat] = num;
-                        }
+                        if (!isNaN(num) && num > maxNum) maxNum = num;
                     }
                 }
             });
-        });
 
-        for (let i = 0; i < req.files.length; i++) {
-            const file = req.files[i];
-            const cat = russianNames[file.fieldname] || 'ФАЙЛ';
-            
-            counters[cat]++; 
             const ext = file.originalname.split('.').pop().toLowerCase();
-            const newFileName = `${cat}_${counters[cat]}.${ext}`;
-            
+            const newFileName = `${cat}_${maxNum + 1}.${ext}`;
             await uploadFileWithRetry(`${finalPath}/${newFileName}`, file.buffer);
+            return res.json({ success: true });
         }
 
-        res.json({ success: true });
+        // ШАГ 4: Загрузка описания (Финальный этап)
+        if (step === 'doc_file') {
+            if (updateDescription !== 'false') {
+                const doc = new Document({sections: [{children: [new Paragraph({children: [new TextRun({text: "Тип переоборудования:", bold: true, size: 28})]}) , new Paragraph({children: [new TextRun({text: conversionType || "", size: 24})]})]}]});
+                const docBuf = await Packer.toBuffer(doc);
+                await uploadFileWithRetry(`${finalPath}/описание.docx`, docBuf);
+            }
+            return res.json({ success: true });
+        }
+
+        res.json({ success: false, error: "Unknown step" });
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
 });
 

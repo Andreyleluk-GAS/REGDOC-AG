@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Check, ChevronRight, User, Briefcase, FileSignature, FileCheck2, Camera, Paperclip, Loader2, FileText, CheckCircle2, RotateCw, History, PlusCircle, AlertCircle, Info } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Check, ChevronRight, User, Briefcase, FileSignature, FileCheck2, Camera, Paperclip, Loader2, FileText, CheckCircle2, RotateCw, History, PlusCircle, AlertCircle, Info, XCircle } from 'lucide-react';
 import imageCompression from 'browser-image-compression';
 
 const steps = [
@@ -21,7 +21,11 @@ export default function RegistrationFlow() {
   const [searchCache, setSearchCache] = useState(null);
   const [showDecision, setShowDecision] = useState(false);
 
-  // --- ДОБАВЛЕНО: Состояния для 5 этапа (Описание)
+  // --- НОВЫЕ СОСТОЯНИЯ ДЛЯ ПОШАГОВОЙ ЗАГРУЗКИ ---
+  const [activeFolderName, setActiveFolderName] = useState('');
+  const [isNewApplication, setIsNewApplication] = useState(true);
+  const [showExitPrompt, setShowExitPrompt] = useState(false); // Окно при отмене
+
   const [hasExistingDescription, setHasExistingDescription] = useState(false);
   const [isDescriptionEditable, setIsDescriptionEditable] = useState(true);
 
@@ -33,20 +37,67 @@ export default function RegistrationFlow() {
   const [existingCloudFiles, setExistingCloudFiles] = useState({ passport: [], snils: [], sts: [], pts: [] });
   const [fileStatuses, setFileStatuses] = useState({});
 
-  const handleSimulateUpload = (file) => {
+  // Предупреждение при закрытии вкладки браузера
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+        if (currentStep > 2 && currentStep < 6 && !showSuccess && isNewApplication) {
+            e.preventDefault();
+            e.returnValue = 'Заявка не завершена. Данные могут быть утеряны.';
+            return e.returnValue;
+        }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [currentStep, showSuccess, isNewApplication]);
+
+  // --- РЕАЛЬНАЯ ЗАГРУЗКА ФАЙЛА С ПРОГРЕССОМ ---
+  const handleRealUpload = (file, category, index) => {
       const key = file.name + file.size;
       setFileStatuses(prev => ({ ...prev, [key]: { state: 'uploading', progress: 0 } }));
-      let progress = 0;
-      const interval = setInterval(() => {
-          progress += Math.floor(Math.random() * 20) + 10;
-          if (progress >= 100) {
-              progress = 100;
-              clearInterval(interval);
-              setFileStatuses(prev => ({ ...prev, [key]: { state: 'done', progress: 100 } }));
-          } else {
+
+      const data = new FormData();
+      data.append('step', 'single_file');
+      data.append('folderName', activeFolderName);
+      data.append('docType', docType);
+      data.append(category, file); // Отправляем именно этот файл под его категорией
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/upload', true);
+      
+      xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) {
+              const progress = Math.round((event.loaded / event.total) * 100);
               setFileStatuses(prev => ({ ...prev, [key]: { state: 'uploading', progress } }));
           }
-      }, 200);
+      };
+
+      xhr.onload = () => {
+          if (xhr.status === 200) {
+              setFileStatuses(prev => ({ ...prev, [key]: { state: 'done', progress: 100 } }));
+          } else {
+              setFileStatuses(prev => ({ ...prev, [key]: { state: 'error', progress: 0 } }));
+              showAlert("Ошибка", "Не удалось загрузить файл " + file.name, "error");
+          }
+      };
+
+      xhr.onerror = () => {
+          setFileStatuses(prev => ({ ...prev, [key]: { state: 'error', progress: 0 } }));
+          showAlert("Ошибка", "Обрыв сети при загрузке", "error");
+      };
+
+      xhr.send(data);
+  };
+
+  // --- УДАЛЕНИЕ ПАПКИ ПРИ ОТМЕНЕ ЗАЯВКИ ---
+  const handleAbortAndClean = async () => {
+      if (isNewApplication && activeFolderName) {
+          setIsSubmitting(true);
+          const data = new FormData();
+          data.append('step', 'delete_folder');
+          data.append('folderName', activeFolderName);
+          try { await fetch('/api/upload', { method: 'POST', body: data }); } catch(e) {}
+      }
+      window.location.reload(); 
   };
 
   const showAlert = (title, message, type = 'info') => {
@@ -83,8 +134,9 @@ export default function RegistrationFlow() {
     if (choice === 'continue') {
       setFormData(prev => ({ ...prev, fullName: searchCache.fullName }));
       if (searchCache.existingFiles) setExistingCloudFiles(searchCache.existingFiles);
+      setActiveFolderName(searchCache.folderName);
+      setIsNewApplication(false);
       
-      // --- ДОБАВЛЕНО: Блокируем описание, если оно уже было в облаке
       if (searchCache.hasDescription) {
           setHasExistingDescription(true);
           setIsDescriptionEditable(false);
@@ -93,8 +145,8 @@ export default function RegistrationFlow() {
       setFormData(prev => ({ ...prev, fullName: '', companyName: '' }));
       setFiles({ passport: [], snils: [], sts: [], pts: [] });
       setExistingCloudFiles({ passport: [], snils: [], sts: [], pts: [] });
-      
-      // --- ДОБАВЛЕНО: Сбрасываем блокировку описания для новой заявки
+      setActiveFolderName('');
+      setIsNewApplication(true);
       setHasExistingDescription(false);
       setIsDescriptionEditable(true);
     }
@@ -149,23 +201,73 @@ export default function RegistrationFlow() {
     } finally { setIsCompressing(false); e.target.value = ''; }
   };
 
+  // --- ФИНАЛЬНАЯ ОТПРАВКА (Теперь только создает DOCX) ---
   const handleSubmit = async () => {
     setIsSubmitting(true);
     const data = new FormData();
-    Object.entries(formData).forEach(([k,v]) => data.append(k,v));
-    data.append('clientType', clientType); data.append('docType', docType);
-    
-    // --- ДОБАВЛЕНО: Флаг для сервера (создавать ли новый docx)
+    data.append('step', 'doc_file');
+    data.append('folderName', activeFolderName);
+    data.append('docType', docType);
+    data.append('conversionType', formData.conversionType);
     data.append('updateDescription', (!hasExistingDescription || isDescriptionEditable).toString());
 
-    Object.keys(files).forEach(cat => files[cat].forEach(f => data.append(cat, f)));
     try {
       const res = await fetch('/api/upload', { method: 'POST', body: data });
       if (res.ok) setShowSuccess(true);
-      else showAlert("Ошибка", "Не удалось отправить файлы на сервер.", "error");
+      else showAlert("Ошибка", "Не удалось завершить заявку.", "error");
     } catch(e) {
-        showAlert("Ошибка связи", "Сервер не отвечает. Попробуйте позже.", "error");
+        showAlert("Ошибка связи", "Сервер не отвечает.", "error");
     } finally { setIsSubmitting(false); }
+  };
+
+  // --- ЛОГИКА ПЕРЕХОДА ПО ЭТАПАМ С СОЗДАНИЕМ ПАПОК ---
+  const handleNextStep = async () => {
+      if (currentStep === 1) { setCurrentStep(2); return; }
+      
+      if (currentStep === 2) {
+          if (!formData.licensePlate.trim() || formData.licensePlate.length < 6) return showAlert("Ошибка", "Введите корректный гос. номер автомобиля", "error");
+          if (clientType === 'legal' && !formData.companyName) return showAlert("Внимание", "Пожалуйста, укажите название компании", "info");
+          if (!validateFullName(formData.fullName)) return showAlert("Неверный формат", "Заполните ФИО полностью на русском языке (как в паспорте)", "error");
+          
+          // СОЗДАЕМ ГЛАВНУЮ ПАПКУ
+          if (!activeFolderName) {
+              setIsSubmitting(true);
+              const data = new FormData();
+              data.append('step', 'main_folder');
+              data.append('clientType', clientType);
+              data.append('fullName', formData.fullName);
+              data.append('companyName', formData.companyName);
+              data.append('licensePlate', formData.licensePlate);
+              try {
+                  const res = await fetch('/api/upload', { method: 'POST', body: data });
+                  const json = await res.json();
+                  if (json.success) setActiveFolderName(json.folderName);
+              } catch (e) {
+                  setIsSubmitting(false);
+                  return showAlert("Ошибка", "Не удалось создать папку на сервере", "error");
+              }
+              setIsSubmitting(false);
+          }
+      }
+
+      if (currentStep === 3) {
+          // СОЗДАЕМ ПОДПАПКУ ПЗ/ПБ
+          setIsSubmitting(true);
+          const data = new FormData();
+          data.append('step', 'sub_folder');
+          data.append('folderName', activeFolderName);
+          data.append('docType', docType);
+          try {
+              await fetch('/api/upload', { method: 'POST', body: data });
+          } catch (e) {
+              setIsSubmitting(false);
+              return showAlert("Ошибка", "Не удалось создать раздел услуги", "error");
+          }
+          setIsSubmitting(false);
+      }
+
+      if (currentStep < 5) setCurrentStep(prev => prev + 1); 
+      else handleSubmit();
   };
 
   return (
@@ -185,6 +287,21 @@ export default function RegistrationFlow() {
             >
                 Понятно
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* --- ОКНО ПРИНУДИТЕЛЬНОГО ВЫХОДА --- */}
+      {showExitPrompt && (
+        <div className="absolute inset-0 bg-[#111827]/95 backdrop-blur-md z-[150] flex items-center justify-center p-6 animate-in zoom-in-95">
+          <div className="bg-white rounded-[40px] p-8 w-full max-w-md shadow-2xl text-center">
+            <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4"><XCircle size={32} /></div>
+            <h3 className="text-xl font-bold text-slate-800 mb-2">Отменить заявку?</h3>
+            <p className="text-slate-500 text-sm mb-8">Вы хотите завершить отправку (сохранить загруженные файлы) или отменить и полностью удалить всю папку с сервера?</p>
+            <div className="space-y-3">
+                <button onClick={() => setShowExitPrompt(false)} className="w-full py-4 bg-brandGreen text-white font-bold rounded-2xl hover:opacity-90">Завершить отправку</button>
+                <button onClick={handleAbortAndClean} disabled={isSubmitting} className="w-full py-4 bg-red-50 text-red-600 font-bold rounded-2xl hover:bg-red-100">{isSubmitting ? <Loader2 className="animate-spin mx-auto" /> : "Удалить заявку и выйти"}</button>
+            </div>
           </div>
         </div>
       )}
@@ -269,14 +386,13 @@ export default function RegistrationFlow() {
         {currentStep === 4 && (
           <div className="space-y-4 animate-in slide-in-from-bottom-2">
             <h3 className="font-bold text-lg text-slate-800">Загрузите фотографии или PDF</h3>
-            <UploadCard title="Паспорт собственника" desc="2 разворота" files={files.passport} existing={existingCloudFiles.passport} onUpload={e => handleFileChange(e, 'passport')} onRemove={i => setFiles({...files, passport: files.passport.filter((_,idx)=>idx!==i)})} fileStatuses={fileStatuses} onSimulateUpload={handleSimulateUpload} />
-            <UploadCard title="СНИЛС" desc="Лицевая сторона" files={files.snils} existing={existingCloudFiles.snils} onUpload={e => handleFileChange(e, 'snils')} onRemove={i => setFiles({...files, snils: files.snils.filter((_,idx)=>idx!==i)})} fileStatuses={fileStatuses} onSimulateUpload={handleSimulateUpload} />
-            <UploadCard title="СТС" desc="Обе стороны" files={files.sts} existing={existingCloudFiles.sts} onUpload={e => handleFileChange(e, 'sts')} onRemove={i => setFiles({...files, sts: files.sts.filter((_,idx)=>idx!==i)})} fileStatuses={fileStatuses} onSimulateUpload={handleSimulateUpload} />
-            <UploadCard title="ПТС" desc="Все страницы" files={files.pts} existing={existingCloudFiles.pts} onUpload={e => handleFileChange(e, 'pts')} onRemove={i => setFiles({...files, pts: files.pts.filter((_,idx)=>idx!==i)})} fileStatuses={fileStatuses} onSimulateUpload={handleSimulateUpload} />
+            <UploadCard title="Паспорт собственника" desc="2 разворота" files={files.passport} existing={existingCloudFiles.passport} onUpload={e => handleFileChange(e, 'passport')} onRemove={i => setFiles({...files, passport: files.passport.filter((_,idx)=>idx!==i)})} fileStatuses={fileStatuses} onSimulateUpload={(f) => handleRealUpload(f, 'passport')} />
+            <UploadCard title="СНИЛС" desc="Лицевая сторона" files={files.snils} existing={existingCloudFiles.snils} onUpload={e => handleFileChange(e, 'snils')} onRemove={i => setFiles({...files, snils: files.snils.filter((_,idx)=>idx!==i)})} fileStatuses={fileStatuses} onSimulateUpload={(f) => handleRealUpload(f, 'snils')} />
+            <UploadCard title="СТС" desc="Обе стороны" files={files.sts} existing={existingCloudFiles.sts} onUpload={e => handleFileChange(e, 'sts')} onRemove={i => setFiles({...files, sts: files.sts.filter((_,idx)=>idx!==i)})} fileStatuses={fileStatuses} onSimulateUpload={(f) => handleRealUpload(f, 'sts')} />
+            <UploadCard title="ПТС" desc="Все страницы" files={files.pts} existing={existingCloudFiles.pts} onUpload={e => handleFileChange(e, 'pts')} onRemove={i => setFiles({...files, pts: files.pts.filter((_,idx)=>idx!==i)})} fileStatuses={fileStatuses} onSimulateUpload={(f) => handleRealUpload(f, 'pts')} />
           </div>
         )}
 
-        {/* --- ДОБАВЛЕНО: ШАГ 5 ИЗМЕНЕН --- */}
         {currentStep === 5 && (
           <div className="space-y-4">
             <div className="flex justify-between items-center mb-2">
@@ -300,17 +416,15 @@ export default function RegistrationFlow() {
         )}
 
         <div className="mt-8 flex gap-3">
-          {currentStep > 1 && <button onClick={() => setCurrentStep(prev => prev - 1)} className="px-6 py-4 rounded-2xl border border-slate-200 font-bold text-slate-500 hover:bg-slate-50 transition-all">Назад</button>}
-          <button onClick={() => {
-            if (currentStep === 1) { setCurrentStep(2); return; }
-            if (currentStep === 2) {
-                if (!formData.licensePlate.trim() || formData.licensePlate.length < 6) return showAlert("Ошибка", "Введите корректный гос. номер автомобиля", "error");
-                if (clientType === 'legal' && !formData.companyName) return showAlert("Внимание", "Пожалуйста, укажите название компании", "info");
-                if (!validateFullName(formData.fullName)) return showAlert("Неверный формат", "Заполните ФИО полностью на русском языке (как в паспорте)", "error");
-            }
-            if (currentStep < 5) setCurrentStep(prev => prev + 1); else handleSubmit();
-          }} className="flex-1 py-4 bg-brandGreen text-white font-bold rounded-2xl shadow-lg">
-            {isSubmitting ? <Loader2 className="animate-spin mx-auto" /> : (currentStep === 5 ? 'Отправить документы' : 'Далее')}
+          {currentStep > 1 && currentStep < 5 && <button onClick={() => setCurrentStep(prev => prev - 1)} className="px-6 py-4 rounded-2xl border border-slate-200 font-bold text-slate-500 hover:bg-slate-50 transition-all">Назад</button>}
+          
+          {/* На 5 шаге вместо "Назад" кнопка "Отменить" */}
+          {currentStep === 5 && isNewApplication && (
+              <button onClick={() => setShowExitPrompt(true)} className="px-6 py-4 rounded-2xl border border-red-200 bg-red-50 font-bold text-red-500 hover:bg-red-100 transition-all">Отменить</button>
+          )}
+
+          <button onClick={handleNextStep} disabled={isSubmitting} className="flex-1 py-4 bg-brandGreen text-white font-bold rounded-2xl shadow-lg flex items-center justify-center">
+            {isSubmitting ? <Loader2 className="animate-spin" /> : (currentStep === 5 ? 'Отправить документы' : 'Далее')}
           </button>
         </div>
       </div>
@@ -368,14 +482,16 @@ function UploadCard({ title, desc, files, existing, onUpload, onRemove, fileStat
                         <span className="truncate max-w-[100px] font-medium text-slate-700">{f.name}</span>
                         <div className="flex items-center gap-1">
                             {status.state === 'pending' && (
-                                <button onClick={() => onSimulateUpload(f)} className="text-white bg-brandGreen hover:bg-green-700 rounded-md p-0.5 transition-colors" title="Загрузить">
+                                <button onClick={() => onSimulateUpload(f)} className="text-white bg-brandGreen hover:bg-green-700 rounded-md p-0.5 transition-colors shadow-md" title="Загрузить на сервер">
                                     <Check size={12} strokeWidth={4} />
                                 </button>
                             )}
                             {status.state === 'done' && (
                                 <CheckCircle2 size={14} className="text-brandGreen" />
                             )}
-                            <button onClick={() => onRemove(i)} className="text-red-400 hover:text-red-600 font-bold p-1 transition-colors" title="Удалить">✕</button>
+                            {status.state !== 'done' && status.state !== 'uploading' && (
+                                <button onClick={() => onRemove(i)} className="text-red-400 hover:text-red-600 font-bold p-1 transition-colors" title="Удалить">✕</button>
+                            )}
                         </div>
                     </div>
                     {status.state === 'uploading' && (
