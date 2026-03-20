@@ -30,13 +30,29 @@ app.get('/api/check-plate', async (req, res) => {
         const rootPath = `/RegDoc_Заявки`;
         if (await client.exists(rootPath) === false) return res.json({ found: false });
         const items = await client.getDirectoryContents(rootPath);
-        const folder = items.find(i => i.type === 'directory' && normalizePlate(i.basename).includes(searchPlate));
+        
+        // --- СТРОГО ЛОКАЛЬНАЯ ПРАВКА ---
+        // Заменили .includes() на строгое равенство (===) извлеченного номера
+        const folder = items.find(i => {
+            if (i.type !== 'directory') return false;
+            
+            // Проверка для нового формата: [Дата][ФИО][Номер]
+            const match = i.basename.match(/\[.*?\]\[.*?\]\[(.*?)\]/);
+            if (match) {
+                return normalizePlate(match[1]) === searchPlate;
+            }
+            
+            // Проверка для старого формата (до введения скобок): ..._Номер
+            const oldParts = i.basename.split('_');
+            return normalizePlate(oldParts[oldParts.length - 1]) === searchPlate;
+        });
+        // -------------------------------
 
         if (folder) {
             const match = folder.basename.match(/\[.*?\]\[(.*?)\]\[.*?\]/);
             const extractedName = match ? match[1].replace(/_/g, ' ') : "Клиент";
             const existingFiles = { passport: [], snils: [], sts: [], pts: [] };
-            let hasDescription = false; // --- ДОБАВЛЕНО: Флаг наличия описания
+            let hasDescription = false; 
             const subFolders = ['Для ПЗ', 'Для ПБ'];
             for (const sub of subFolders) {
                 const subPath = `${folder.filename}/${sub}`;
@@ -44,7 +60,6 @@ app.get('/api/check-plate', async (req, res) => {
                     const contents = await client.getDirectoryContents(subPath);
                     contents.forEach(file => {
                         if (file.type === 'file') {
-                            // --- ДОБАВЛЕНО: Ищем описание.docx
                             if (file.basename.toLowerCase() === 'описание.docx') {
                                 hasDescription = true;
                             } else if (!file.basename.includes('.docx')) {
@@ -79,7 +94,6 @@ async function uploadFileWithRetry(path, buffer) {
 
 app.post('/api/upload', upload.any(), async (req, res) => {
     try {
-        // --- ДОБАВЛЕНО: Принимаем флаг updateDescription
         const { clientType, docType, fullName, companyName, licensePlate, conversionType, updateDescription } = req.body;
         
         const now = new Date();
@@ -102,7 +116,6 @@ app.post('/api/upload', upload.any(), async (req, res) => {
         await createDirWithRetry(clientPath);
         await createDirWithRetry(finalPath);
 
-        // --- ДОБАВЛЕНО: Создаем описание.docx только если разрешено
         if (updateDescription !== 'false') {
             const doc = new Document({sections: [{children: [new Paragraph({children: [new TextRun({text: "Тип переоборудования:", bold: true, size: 28})]}) , new Paragraph({children: [new TextRun({text: conversionType || "", size: 24})]})]}]});
             const docBuf = await Packer.toBuffer(doc);
