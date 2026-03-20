@@ -15,6 +15,7 @@ const client = createClient("https://webdav.cloud.mail.ru/", {
     password: process.env.VK_CLOUD_PASSWORD
 });
 
+// Хелпер нормализации номера
 const normalizePlate = (plate) => {
     const map = {'A':'А','B':'В','E':'Е','K':'К','M':'М','H':'Н','O':'О','P':'Р','C':'С','T':'Т','Y':'У','X':'Х'};
     return plate.toUpperCase().replace(/[ABEKMHOPCTYX]/g, char => map[char] || char).replace(/[^А-ЯЁ0-9]/g, '');
@@ -22,6 +23,7 @@ const normalizePlate = (plate) => {
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// --- ЭНДПОИНТ ПРОВЕРКИ ---
 app.get('/api/check-plate', async (req, res) => {
     try {
         const { plate } = req.query;
@@ -58,6 +60,7 @@ app.get('/api/check-plate', async (req, res) => {
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+// --- ЛОГИКА ЗАГРУЗКИ ---
 async function createDirWithRetry(path) {
     if (await client.exists(path) === false) {
         await client.createDirectory(path);
@@ -95,27 +98,27 @@ app.post('/api/upload', upload.any(), async (req, res) => {
         await createDirWithRetry(clientPath);
         await createDirWithRetry(finalPath);
 
-        // Создаем описание.docx
         const doc = new Document({sections: [{children: [new Paragraph({children: [new TextRun({text: "Тип переоборудования:", bold: true, size: 28})]}) , new Paragraph({children: [new TextRun({text: conversionType || "", size: 24})]})]}]});
         const docBuf = await Packer.toBuffer(doc);
         await uploadFileWithRetry(`${finalPath}/описание.docx`, docBuf);
 
         const russianNames = { 'passport': 'ПАСПОРТ', 'snils': 'СНИЛС', 'sts': 'СТС', 'pts': 'ПТС' };
         
-        // --- НОВАЯ ЛОГИКА КРАСИВОГО ИМЕНОВАНИЯ ---
+        // --- ИЗМЕНЕНИЯ ТОЛЬКО ЗДЕСЬ: ЛОГИКА ИМЕНОВАНИЯ ФАЙЛОВ ---
         
-        // 1. Получаем список того, что уже есть в папке
-        const existingItems = await client.getDirectoryContents(finalPath);
-        const existingFileNames = existingItems.filter(i => i.type === 'file').map(i => i.basename.toUpperCase());
+        // 1. Получаем список файлов, которые УЖЕ лежат в папке, чтобы не затереть их
+        let existingFileNames = [];
+        if (await client.exists(finalPath)) {
+            const existingItems = await client.getDirectoryContents(finalPath);
+            existingFileNames = existingItems.filter(i => i.type === 'file').map(i => i.basename.toUpperCase());
+        }
 
-        // 2. Создаем объект счетчиков для каждой категории
         const counters = { 'ПАСПОРТ': 0, 'СНИЛС': 0, 'СТС': 0, 'ПТС': 0, 'ФАЙЛ': 0 };
 
-        // 3. Анализируем существующие файлы, чтобы понять, с какого номера продолжать
+        // 2. Ищем максимальный индекс (цифру) для каждой категории из уже существующих файлов
         existingFileNames.forEach(name => {
             Object.keys(counters).forEach(cat => {
                 if (name.startsWith(cat + '_')) {
-                    // Пытаемся вытащить цифру после подчеркивания (например из ПАСПОРТ_2.PDF)
                     const parts = name.split('_');
                     if (parts.length > 1) {
                         const num = parseInt(parts[1]);
@@ -127,16 +130,23 @@ app.post('/api/upload', upload.any(), async (req, res) => {
             });
         });
 
-        // 4. Загружаем новые файлы
-        for (const file of req.files) {
+        // 3. Загружаем новые файлы с аккуратной нумерацией
+        for (let i = 0; i < req.files.length; i++) {
+            const file = req.files[i];
             const cat = russianNames[file.fieldname] || 'ФАЙЛ';
-            counters[cat]++; // Увеличиваем номер на +1
             
+            counters[cat]++; // Увеличиваем номер на +1 (например, с 0 на 1)
+            
+            // Получаем расширение файла (pdf, jpg, png и т.д.)
             const ext = file.originalname.split('.').pop().toLowerCase();
+            
+            // Формируем чистое имя: ПАСПОРТ_1.pdf
             const newFileName = `${cat}_${counters[cat]}.${ext}`;
             
             await uploadFileWithRetry(`${finalPath}/${newFileName}`, file.buffer);
         }
+        
+        // --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
         res.json({ success: true });
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
