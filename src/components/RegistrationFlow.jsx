@@ -38,6 +38,8 @@ export default function RegistrationFlow() {
 
   useEffect(() => {
     const handleBeforeUnload = (e) => {
+        // Игнорируем блокировку, если это осознанный выход через кнопку удаления
+        if (window.__isExiting) return; 
         if (currentStep > 2 && currentStep < 6 && !showSuccess && isNewApplication) {
             e.preventDefault();
             e.returnValue = 'Заявка не завершена. Данные могут быть утеряны.';
@@ -86,6 +88,7 @@ export default function RegistrationFlow() {
   };
 
   const handleAbortAndClean = async () => {
+      window.__isExiting = true; // Отключаем системный алерт браузера
       if (isNewApplication && activeFolderName) {
           setIsSubmitting(true);
           const data = new FormData();
