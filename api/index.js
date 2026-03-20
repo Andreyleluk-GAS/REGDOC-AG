@@ -43,11 +43,7 @@ app.get('/api/check-plate', async (req, res) => {
             const match = folder.basename.match(/\[.*?\]\[(.*?)\]\[.*?\]/);
             const extractedName = match ? match[1].replace(/_/g, ' ') : "Клиент";
             const existingFiles = { passport: [], snils: [], sts: [], pts: [] };
-            
-            // СТРОГАЯ ЛОКАЛЬНАЯ ПРАВКА: Проверяем наличие описания для ПЗ и ПБ отдельно
-            let hasDescriptionPZ = false; 
-            let hasDescriptionPB = false; 
-            
+            let hasDescription = false; 
             const subFolders = ['Для ПЗ', 'Для ПБ'];
             for (const sub of subFolders) {
                 const subPath = `${folder.filename}/${sub}`;
@@ -56,8 +52,7 @@ app.get('/api/check-plate', async (req, res) => {
                     contents.forEach(file => {
                         if (file.type === 'file') {
                             if (file.basename.toLowerCase() === 'описание.docx') {
-                                if (sub === 'Для ПЗ') hasDescriptionPZ = true;
-                                if (sub === 'Для ПБ') hasDescriptionPB = true;
+                                hasDescription = true;
                             } else if (!file.basename.includes('.docx')) {
                                 const name = file.basename.toUpperCase();
                                 if (name.includes('ПАСПОРТ')) existingFiles.passport.push(file.basename);
@@ -69,7 +64,8 @@ app.get('/api/check-plate', async (req, res) => {
                     });
                 }
             }
-            return res.json({ found: true, fullName: extractedName, existingFiles, hasDescriptionPZ, hasDescriptionPB, folderName: folder.basename });
+            // ДОБАВЛЕНО: возвращаем оригинальное имя папки, чтобы фронтенд знал, куда грузить
+            return res.json({ found: true, fullName: extractedName, existingFiles, hasDescription, folderName: folder.basename });
         }
         res.json({ found: false });
     } catch (error) { res.status(500).json({ error: error.message }); }
@@ -88,10 +84,12 @@ async function uploadFileWithRetry(path, buffer) {
     }
 }
 
+// НОВАЯ ЛОГИКА: Пошаговая обработка запросов
 app.post('/api/upload', upload.any(), async (req, res) => {
     try {
         const { step, folderName, clientType, docType, fullName, companyName, licensePlate, conversionType, updateDescription } = req.body;
         
+        // ШАГ 1: Создание корневой папки клиента
         if (step === 'main_folder') {
             const now = new Date();
             const ekb = new Intl.DateTimeFormat('ru-RU', {timeZone: 'Asia/Yekaterinburg', year:'numeric', month:'2-digit', day:'2-digit'}).formatToParts(now);
@@ -108,9 +106,11 @@ app.post('/api/upload', upload.any(), async (req, res) => {
             return res.json({ success: true, folderName: newFolderName });
         }
 
+        // Базовые пути для остальных шагов
         const clientPath = `/RegDoc_Заявки/${folderName}`;
         const finalPath = `${clientPath}/${docType === 'pz' ? 'Для ПЗ' : 'Для ПБ'}`;
 
+        // УДАЛЕНИЕ ПАПКИ (Если пользователь отменил заявку)
         if (step === 'delete_folder') {
             if (await client.exists(clientPath)) {
                 await client.deleteFile(clientPath); 
@@ -118,11 +118,13 @@ app.post('/api/upload', upload.any(), async (req, res) => {
             return res.json({ success: true });
         }
 
+        // ШАГ 2: Создание подпапки (ПЗ или ПБ)
         if (step === 'sub_folder') {
             await createDirWithRetry(finalPath);
             return res.json({ success: true });
         }
 
+        // ШАГ 3: Загрузка ОДНОГО файла
         if (step === 'single_file') {
             const file = req.files[0];
             const russianNames = { 'passport': 'ПАСПОРТ', 'snils': 'СНИЛС', 'sts': 'СТС', 'pts': 'ПТС' };
@@ -151,6 +153,7 @@ app.post('/api/upload', upload.any(), async (req, res) => {
             return res.json({ success: true });
         }
 
+        // ШАГ 4: Загрузка описания (Финальный этап)
         if (step === 'doc_file') {
             if (updateDescription !== 'false') {
                 const doc = new Document({sections: [{children: [new Paragraph({children: [new TextRun({text: "Тип переоборудования:", bold: true, size: 28})]}) , new Paragraph({children: [new TextRun({text: conversionType || "", size: 24})]})]}]});
