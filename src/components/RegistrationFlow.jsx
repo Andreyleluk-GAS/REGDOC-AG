@@ -21,10 +21,9 @@ export default function RegistrationFlow() {
   const [searchCache, setSearchCache] = useState(null);
   const [showDecision, setShowDecision] = useState(false);
 
-  // --- НОВЫЕ СОСТОЯНИЯ ДЛЯ ПОШАГОВОЙ ЗАГРУЗКИ ---
   const [activeFolderName, setActiveFolderName] = useState('');
   const [isNewApplication, setIsNewApplication] = useState(true);
-  const [showExitPrompt, setShowExitPrompt] = useState(false); // Окно при отмене
+  const [showExitPrompt, setShowExitPrompt] = useState(false);
 
   const [hasExistingDescription, setHasExistingDescription] = useState(false);
   const [isDescriptionEditable, setIsDescriptionEditable] = useState(true);
@@ -37,7 +36,6 @@ export default function RegistrationFlow() {
   const [existingCloudFiles, setExistingCloudFiles] = useState({ passport: [], snils: [], sts: [], pts: [] });
   const [fileStatuses, setFileStatuses] = useState({});
 
-  // Предупреждение при закрытии вкладки браузера
   useEffect(() => {
     const handleBeforeUnload = (e) => {
         if (currentStep > 2 && currentStep < 6 && !showSuccess && isNewApplication) {
@@ -50,7 +48,6 @@ export default function RegistrationFlow() {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [currentStep, showSuccess, isNewApplication]);
 
-  // --- РЕАЛЬНАЯ ЗАГРУЗКА ФАЙЛА С ПРОГРЕССОМ ---
   const handleRealUpload = (file, category, index) => {
       const key = file.name + file.size;
       setFileStatuses(prev => ({ ...prev, [key]: { state: 'uploading', progress: 0 } }));
@@ -59,7 +56,7 @@ export default function RegistrationFlow() {
       data.append('step', 'single_file');
       data.append('folderName', activeFolderName);
       data.append('docType', docType);
-      data.append(category, file); // Отправляем именно этот файл под его категорией
+      data.append(category, file);
 
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/api/upload', true);
@@ -88,7 +85,6 @@ export default function RegistrationFlow() {
       xhr.send(data);
   };
 
-  // --- УДАЛЕНИЕ ПАПКИ ПРИ ОТМЕНЕ ЗАЯВКИ ---
   const handleAbortAndClean = async () => {
       if (isNewApplication && activeFolderName) {
           setIsSubmitting(true);
@@ -223,7 +219,6 @@ export default function RegistrationFlow() {
     } finally { setIsCompressing(false); e.target.value = ''; }
   };
 
-  // --- ФИНАЛЬНАЯ ОТПРАВКА (Теперь только создает DOCX) ---
   const handleSubmit = async () => {
     setIsSubmitting(true);
     const data = new FormData();
@@ -242,7 +237,8 @@ export default function RegistrationFlow() {
     } finally { setIsSubmitting(false); }
   };
 
-  // --- ЛОГИКА ПЕРЕХОДА ПО ЭТАПАМ С СОЗДАНИЕМ ПАПОК ---
+  const isAnyFileUploading = Object.values(fileStatuses).some(status => status.state === 'uploading');
+
   const handleNextStep = async () => {
       if (currentStep === 1) { setCurrentStep(2); return; }
       
@@ -251,7 +247,6 @@ export default function RegistrationFlow() {
           if (clientType === 'legal' && !formData.companyName) return showAlert("Внимание", "Пожалуйста, укажите название компании", "info");
           if (!validateFullName(formData.fullName)) return showAlert("Неверный формат", "Заполните ФИО полностью на русском языке (как в паспорте)", "error");
           
-          // СОЗДАЕМ ГЛАВНУЮ ПАПКУ
           if (!activeFolderName) {
               setIsSubmitting(true);
               const data = new FormData();
@@ -273,7 +268,6 @@ export default function RegistrationFlow() {
       }
 
       if (currentStep === 3) {
-          // СОЗДАЕМ ПОДПАПКУ ПЗ/ПБ
           setIsSubmitting(true);
           const data = new FormData();
           data.append('step', 'sub_folder');
@@ -286,6 +280,10 @@ export default function RegistrationFlow() {
               return showAlert("Ошибка", "Не удалось создать раздел услуги", "error");
           }
           setIsSubmitting(false);
+      }
+
+      if (currentStep === 4 && isAnyFileUploading) {
+          return showAlert("Загрузка файлов", "Пожалуйста, дождитесь окончания загрузки файлов перед переходом на следующий этап.", "info");
       }
 
       if (currentStep < 5) setCurrentStep(prev => prev + 1); 
@@ -313,7 +311,6 @@ export default function RegistrationFlow() {
         </div>
       )}
 
-      {/* --- ОКНО ПРИНУДИТЕЛЬНОГО ВЫХОДА --- */}
       {showExitPrompt && (
         <div className="absolute inset-0 bg-[#111827]/95 backdrop-blur-md z-[150] flex items-center justify-center p-6 animate-in zoom-in-95">
           <div className="bg-white rounded-[40px] p-8 w-full max-w-md shadow-2xl text-center">
@@ -408,6 +405,10 @@ export default function RegistrationFlow() {
         {currentStep === 4 && (
           <div className="space-y-4 animate-in slide-in-from-bottom-2">
             <h3 className="font-bold text-lg text-slate-800">Загрузите фотографии или PDF</h3>
+            <div className="bg-blue-50 p-3 rounded-2xl flex gap-3 text-blue-700 text-xs border border-blue-100">
+              <Info size={16} className="shrink-0 mt-0.5" />
+              <p>Ограничение по размеру одного файла — <b>не более 5 МБ</b>.</p>
+            </div>
             <UploadCard title="Паспорт собственника" desc="2 разворота" files={files.passport} existing={existingCloudFiles.passport} onUpload={e => handleFileChange(e, 'passport')} onRemove={i => setFiles({...files, passport: files.passport.filter((_,idx)=>idx!==i)})} fileStatuses={fileStatuses} onSimulateUpload={(f) => handleRealUpload(f, 'passport')} />
             <UploadCard title="СНИЛС" desc="Лицевая сторона" files={files.snils} existing={existingCloudFiles.snils} onUpload={e => handleFileChange(e, 'snils')} onRemove={i => setFiles({...files, snils: files.snils.filter((_,idx)=>idx!==i)})} fileStatuses={fileStatuses} onSimulateUpload={(f) => handleRealUpload(f, 'snils')} />
             <UploadCard title="СТС" desc="Обе стороны" files={files.sts} existing={existingCloudFiles.sts} onUpload={e => handleFileChange(e, 'sts')} onRemove={i => setFiles({...files, sts: files.sts.filter((_,idx)=>idx!==i)})} fileStatuses={fileStatuses} onSimulateUpload={(f) => handleRealUpload(f, 'sts')} />
@@ -438,9 +439,15 @@ export default function RegistrationFlow() {
         )}
 
         <div className="mt-8 flex gap-3">
-          {currentStep > 1 && currentStep < 5 && <button onClick={() => setCurrentStep(prev => prev - 1)} className="px-6 py-4 rounded-2xl border border-slate-200 font-bold text-slate-500 hover:bg-slate-50 transition-all">Назад</button>}
+          {currentStep > 1 && currentStep < 5 && (
+            <button onClick={() => {
+                if (currentStep === 4 && isAnyFileUploading) {
+                    return showAlert("Загрузка файлов", "Пожалуйста, дождитесь окончания загрузки файлов перед переходом на другой этап.", "info");
+                }
+                setCurrentStep(prev => prev - 1);
+            }} className="px-6 py-4 rounded-2xl border border-slate-200 font-bold text-slate-500 hover:bg-slate-50 transition-all">Назад</button>
+          )}
           
-          {/* На 5 шаге вместо "Назад" кнопка "Отменить" */}
           {currentStep === 5 && isNewApplication && (
               <button onClick={() => setShowExitPrompt(true)} className="px-6 py-4 rounded-2xl border border-red-200 bg-red-50 font-bold text-red-500 hover:bg-red-100 transition-all">Отменить</button>
           )}
@@ -454,7 +461,6 @@ export default function RegistrationFlow() {
   );
 }
 
-// Вспомогательные компоненты
 function SelectionCard({ active, onClick, icon, title, desc }) {
   return (
     <div onClick={onClick} className={`p-4 rounded-2xl border-2 cursor-pointer flex items-center gap-4 transition-all ${active ? 'border-brandGreen bg-green-50 shadow-sm' : 'border-slate-100 bg-white shadow-sm hover:border-slate-200'}`}>
