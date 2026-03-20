@@ -444,23 +444,26 @@ export default function RegistrationFlow() {
           </div>
         )}
 
-        <div className="mt-8 flex gap-3">
-          {currentStep > 1 && currentStep < 5 && (
-            <button onClick={() => {
-                if (currentStep === 4 && isAnyFileUploading) {
-                    return showAlert("Загрузка файлов", "Пожалуйста, дождитесь окончания загрузки файлов перед переходом на другой этап.", "info");
-                }
-                setCurrentStep(prev => prev - 1);
-            }} className="px-6 py-4 rounded-2xl border border-slate-200 font-bold text-slate-500 hover:bg-slate-50 transition-all">Назад</button>
-          )}
+        {/* ИЗМЕНЕН ТОЛЬКО ЭТОТ БЛОК КНОПОК */}
+        <div className="mt-8 flex flex-col gap-4">
+          <div className="flex gap-3">
+            {currentStep > 1 && (
+              <button onClick={() => {
+                  if (currentStep === 4 && isAnyFileUploading) {
+                      return showAlert("Загрузка файлов", "Пожалуйста, дождитесь окончания загрузки файлов перед переходом на другой этап.", "info");
+                  }
+                  setCurrentStep(prev => prev - 1);
+              }} className="px-6 py-4 rounded-2xl border border-slate-200 font-bold text-slate-500 hover:bg-slate-50 transition-all">Назад</button>
+            )}
+
+            <button onClick={handleNextStep} disabled={isSubmitting} className="flex-1 py-4 bg-brandGreen text-white font-bold rounded-2xl shadow-lg flex items-center justify-center">
+              {isSubmitting ? <Loader2 className="animate-spin" /> : (currentStep === 5 ? 'Отправить документы' : 'Далее')}
+            </button>
+          </div>
           
           {currentStep === 5 && isNewApplication && (
-              <button onClick={() => setShowExitPrompt(true)} className="px-6 py-4 rounded-2xl border border-red-200 bg-red-50 font-bold text-red-500 hover:bg-red-100 transition-all">Отменить</button>
+              <button onClick={() => setShowExitPrompt(true)} className="mx-auto px-6 py-2.5 rounded-2xl border border-red-200 bg-red-50 text-sm font-bold text-red-500 hover:bg-red-100 transition-all">Отменить</button>
           )}
-
-          <button onClick={handleNextStep} disabled={isSubmitting} className="flex-1 py-4 bg-brandGreen text-white font-bold rounded-2xl shadow-lg flex items-center justify-center">
-            {isSubmitting ? <Loader2 className="animate-spin" /> : (currentStep === 5 ? 'Отправить документы' : 'Далее')}
-          </button>
         </div>
       </div>
     </div>
