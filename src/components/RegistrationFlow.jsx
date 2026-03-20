@@ -238,6 +238,7 @@ export default function RegistrationFlow() {
   };
 
   const isAnyFileUploading = Object.values(fileStatuses).some(status => status.state === 'uploading');
+  const isAnyFilePending = Object.values(fileStatuses).some(status => status.state === 'pending');
 
   const handleNextStep = async () => {
       if (currentStep === 1) { setCurrentStep(2); return; }
@@ -282,8 +283,13 @@ export default function RegistrationFlow() {
           setIsSubmitting(false);
       }
 
-      if (currentStep === 4 && isAnyFileUploading) {
-          return showAlert("Загрузка файлов", "Пожалуйста, дождитесь окончания загрузки файлов перед переходом на следующий этап.", "info");
+      if (currentStep === 4) {
+          if (isAnyFileUploading) {
+              return showAlert("Загрузка файлов", "Пожалуйста, дождитесь окончания загрузки файлов перед переходом на другой этап.", "info");
+          }
+          if (isAnyFilePending) {
+              return showAlert("Внимание", "Для перехода на следующий этап необходимо нажать кнопку загрузки для всех выбранных файлов.", "info");
+          }
       }
 
       if (currentStep < 5) setCurrentStep(prev => prev + 1); 
