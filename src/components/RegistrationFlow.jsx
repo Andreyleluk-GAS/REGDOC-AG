@@ -1,9 +1,13 @@
 import React, { useState } from 'react';
-import { Check, ChevronRight, User, Briefcase, FileSignature, FileCheck2, Camera, Paperclip, Loader2, FileText, CheckCircle2, RotateCw, History, PlusCircle, AlertCircle, UploadCloud, Trash2 } from 'lucide-react';
+import { Check, ChevronRight, User, Briefcase, FileSignature, FileCheck2, Camera, Paperclip, Loader2, FileText, CheckCircle2, RotateCw, History, PlusCircle, AlertCircle, Info } from 'lucide-react';
 import imageCompression from 'browser-image-compression';
 
 const steps = [
-  { id: 1, title: 'Заявитель' }, { id: 2, title: 'Данные' }, { id: 3, title: 'Услуга' }, { id: 4, title: 'Документы' }, { id: 5, title: 'Описание' },
+  { id: 1, title: 'Заявитель' }, 
+  { id: 2, title: 'Данные' }, 
+  { id: 3, title: 'Услуга' }, 
+  { id: 4, title: 'Документы' }, 
+  { id: 5, title: 'Описание' },
 ];
 
 export default function RegistrationFlow() {
@@ -12,20 +16,63 @@ export default function RegistrationFlow() {
   const [isCompressing, setIsCompressing] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
+  
+  // Состояние для нашего универсального модального окна
   const [modal, setModal] = useState({ show: false, title: '', message: '', type: 'info' });
 
-  const [formData, setFormData] = useState({ fullName: '', companyName: '', licensePlate: '', conversionType: 'На транспортное средство предполагается установка комплекта газобаллонного оборудования для питания двигателя природным газом (пропан).' });
+  const [searchCache, setSearchCache] = useState(null);
+  const [showDecision, setShowDecision] = useState(false);
+
   const [clientType, setClientType] = useState('individual');
   const [docType, setDocType] = useState('pz');
-
-  // Состояние файлов
+  const [formData, setFormData] = useState({ fullName: '', companyName: '', licensePlate: '', conversionType: 'На транспортное средство предполагается установка комплекта газобаллонного оборудования для питания двигателя природным газом (пропан).' });
+  
   const [files, setFiles] = useState({ passport: [], snils: [], sts: [], pts: [] });
-  // Состояние статуса загрузки для каждого раздела: 'idle' | 'uploading' | 'success'
-  const [uploadStatus, setUploadStatus] = useState({ passport: 'idle', snils: 'idle', sts: 'idle', pts: 'idle' });
-  // Процент загрузки (симуляция для плавности)
-  const [uploadProgress, setUploadProgress] = useState({ passport: 0, snils: 0, sts: 0, pts: 0 });
+  const [existingCloudFiles, setExistingCloudFiles] = useState({ passport: [], snils: [], sts: [], pts: [] });
 
-  const showAlert = (title, message, type = 'info') => setModal({ show: true, title, message, type });
+  // Функция для вызова стильного уведомления
+  const showAlert = (title, message, type = 'info') => {
+    setModal({ show: true, title, message, type });
+  };
+
+  const validateFullName = (name) => {
+    const fioRegex = /^[А-ЯЁ][а-яё]+(\s+[А-ЯЁ][а-яё]+)+$/;
+    return fioRegex.test(name.trim());
+  };
+
+  const checkExistingApplication = async () => {
+    if (!formData.licensePlate.trim()) {
+        showAlert("Внимание", "Пожалуйста, введите гос. номер для поиска", "info");
+        return;
+    }
+    setIsSearching(true);
+    try {
+      const res = await fetch(`/api/check-plate?plate=${encodeURIComponent(formData.licensePlate)}`);
+      const data = await res.json();
+      if (data.found) {
+        setSearchCache(data);
+        setShowDecision(true);
+      } else {
+        showAlert("Не найдено", "Заявка с таким номером не найдена. Вы можете заполнить её с нуля.", "info");
+      }
+    } catch (e) { 
+        showAlert("Ошибка", "Не удалось связаться с сервером. Проверьте интернет.", "error"); 
+    }
+    finally { setIsSearching(false); }
+  };
+
+  const handleDecision = (choice) => {
+    if (choice === 'continue') {
+      setFormData(prev => ({ ...prev, fullName: searchCache.fullName }));
+      if (searchCache.existingFiles) setExistingCloudFiles(searchCache.existingFiles);
+    } else {
+      setFormData(prev => ({ ...prev, fullName: '', companyName: '' }));
+      setFiles({ passport: [], snils: [], sts: [], pts: [] });
+      setExistingCloudFiles({ passport: [], snils: [], sts: [], pts: [] });
+    }
+    setShowDecision(false);
+    setCurrentStep(2);
+  };
 
   const handlePlateInput = (e) => {
     let raw = e.target.value.toUpperCase();
@@ -48,86 +95,96 @@ export default function RegistrationFlow() {
     try {
       const processed = await Promise.all(selected.map(async (file) => {
         if (file.type === 'application/pdf') {
-            if (file.size/1024/1024 > 8) { showAlert("Ошибка", `PDF ${file.name} > 8МБ`, "error"); return null; }
+            if (file.size/1024/1024 > 8) {
+                showAlert("Файл слишком большой", `PDF ${file.name} превышает 8 МБ.`, "error");
+                return null;
+            }
             return file;
         }
-        const blob = await imageCompression(file, { maxSizeMB: 1.5, maxWidthOrHeight: 1920, useWebWorker: true });
-        return new File([blob], file.name, { type: file.type });
+        if (file.type.startsWith('image/')) {
+            const blob = await imageCompression(file, { maxSizeMB: 1.5, maxWidthOrHeight: 1920, useWebWorker: true });
+            return new File([blob], file.name, { type: file.type });
+        }
+        return null;
       }));
-      setFiles(prev => ({ ...prev, [category]: [...prev[category], ...processed.filter(f => f !== null)] }));
-      setUploadStatus(prev => ({ ...prev, [category]: 'idle' })); // Сбрасываем статус при добавлении новых
+      const valid = processed.filter(f => f !== null);
+      setFiles(prev => ({ ...prev, [category]: [...prev[category], ...valid] }));
     } finally { setIsCompressing(false); e.target.value = ''; }
   };
 
-  // ФУНКЦИЯ ЗАГРУЗКИ ОДНОГО РАЗДЕЛА
-  const uploadCategory = async (category) => {
-    if (files[category].length === 0) return;
-    
-    setUploadStatus(prev => ({ ...prev, [category]: 'uploading' }));
-    setUploadProgress(prev => ({ ...prev, [category]: 10 }));
-
-    const data = new FormData();
-    data.append('clientType', clientType);
-    data.append('docType', docType);
-    data.append('fullName', formData.fullName);
-    data.append('companyName', formData.companyName);
-    data.append('licensePlate', formData.licensePlate);
-    files[category].forEach(f => data.append(category, f));
-
-    try {
-        // Симуляция движения ползунка
-        const interval = setInterval(() => {
-            setUploadProgress(prev => ({ 
-                ...prev, 
-                [category]: prev[category] < 90 ? prev[category] + 10 : 90 
-            }));
-        }, 400);
-
-        const res = await fetch('/api/upload', { method: 'POST', body: data });
-        clearInterval(interval);
-
-        if (res.ok) {
-            setUploadProgress(prev => ({ ...prev, [category]: 100 }));
-            setTimeout(() => setUploadStatus(prev => ({ ...prev, [category]: 'success' })), 500);
-        } else {
-            throw new Error();
-        }
-    } catch (e) {
-        setUploadStatus(prev => ({ ...prev, [category]: 'idle' }));
-        showAlert("Ошибка", "Не удалось загрузить этот блок. Попробуйте снова.", "error");
-    }
-  };
-
-  const handleFinalSubmit = async () => {
-    // Проверка: всё ли загружено
-    const pending = Object.keys(files).filter(cat => files[cat].length > 0 && uploadStatus[cat] !== 'success');
-    if (pending.length > 0) {
-        return showAlert("Внимание", "Загрузите выбранные файлы (нажмите на кнопку со стрелкой в каждом блоке)", "info");
-    }
-
+  const handleSubmit = async () => {
     setIsSubmitting(true);
+    const data = new FormData();
+    Object.entries(formData).forEach(([k,v]) => data.append(k,v));
+    data.append('clientType', clientType); data.append('docType', docType);
+    Object.keys(files).forEach(cat => files[cat].forEach(f => data.append(cat, f)));
     try {
-        // Отправляем финальный запрос для создания DOCX
-        const data = new FormData();
-        data.append('isDocOnly', 'true');
-        Object.entries(formData).forEach(([k,v]) => data.append(k,v));
-        data.append('clientType', clientType);
-        data.append('docType', docType);
-
-        const res = await fetch('/api/upload', { method: 'POST', body: data });
-        if (res.ok) setShowSuccess(true);
+      const res = await fetch('/api/upload', { method: 'POST', body: data });
+      if (res.ok) setShowSuccess(true);
+      else showAlert("Ошибка", "Не удалось отправить файлы на сервер.", "error");
+    } catch(e) {
+        showAlert("Ошибка связи", "Сервер не отвечает. Попробуйте позже.", "error");
     } finally { setIsSubmitting(false); }
   };
 
   return (
-    <div className="bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden max-w-2xl mx-auto relative">
+    <div className="bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden max-w-2xl mx-auto relative min-h-[500px]">
       
-      {/* Модалки (Успех, Ошибка, Загрузка) */}
-      {modal.show && <Modal data={modal} onClose={() => setModal({...modal, show: false})} />}
-      {showSuccess && <SuccessModal />}
-      {isCompressing && <Loader label="Сжатие фото..." />}
+      {/* 🛠 УНИВЕРСАЛЬНОЕ СТИЛЬНОЕ УВЕДОМЛЕНИЕ (Вместо alert) */}
+      {modal.show && (
+        <div className="absolute inset-0 bg-[#111827]/40 backdrop-blur-md z-[200] flex items-center justify-center p-6 animate-in fade-in zoom-in-95 duration-200">
+          <div className="bg-white rounded-[40px] p-8 w-full max-w-sm text-center shadow-2xl border-t-4 border-slate-100">
+            <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 ${modal.type === 'error' ? 'bg-red-100 text-red-500' : 'bg-blue-100 text-blue-500'}`}>
+              {modal.type === 'error' ? <AlertCircle size={32} /> : <Info size={32} />}
+            </div>
+            <h3 className="text-xl font-bold text-slate-800 mb-2">{modal.title}</h3>
+            <p className="text-slate-500 text-sm leading-relaxed mb-8">{modal.message}</p>
+            <button 
+                onClick={() => setModal({ ...modal, show: false })}
+                className="w-full py-4 bg-slate-900 text-white font-bold rounded-2xl hover:opacity-90 transition-all shadow-lg"
+            >
+                Понятно
+            </button>
+          </div>
+        </div>
+      )}
 
-      {/* Прогресс шагов */}
+      {/* Окно Решения (Продолжить/Новая) */}
+      {showDecision && (
+        <div className="absolute inset-0 bg-[#111827]/95 backdrop-blur-md z-[110] flex items-center justify-center p-6 animate-in zoom-in-95">
+          <div className="bg-white rounded-[40px] p-8 w-full max-w-md shadow-2xl">
+            <div className="w-16 h-16 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto mb-4"><History size={32} /></div>
+            <h3 className="text-xl font-bold text-slate-800 text-center mb-2">Найдена заявка!</h3>
+            <p className="text-slate-500 text-center text-sm mb-8">Для автомобиля <b>{formData.licensePlate}</b>. Как поступим?</p>
+            <div className="space-y-3">
+                <button onClick={() => handleDecision('continue')} className="w-full py-4 bg-brandGreen text-white font-bold rounded-2xl flex items-center justify-center gap-2 transition-all"><RotateCw size={18} /> Продолжить</button>
+                <button onClick={() => handleDecision('new')} className="w-full py-4 bg-slate-100 text-slate-600 font-bold rounded-2xl flex items-center justify-center gap-2 transition-all"><PlusCircle size={18} /> Создать новую</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Окно Успеха */}
+      {showSuccess && (
+        <div className="absolute inset-0 bg-[#111827]/90 backdrop-blur-md z-[100] flex items-center justify-center p-6 animate-in fade-in">
+          <div className="bg-white rounded-[40px] p-10 w-full max-w-sm text-center shadow-2xl">
+            <div className="w-20 h-20 bg-green-100 text-brandGreen rounded-full flex items-center justify-center mx-auto mb-6"><CheckCircle2 size={48} /></div>
+            <h3 className="text-slate-400 text-[10px] font-bold uppercase tracking-[0.2em] mb-2 text-center">Ответ от регистратора:</h3>
+            <p className="text-xl font-bold text-slate-800 mb-8 text-center">Заявка принята в работу!</p>
+            <button onClick={() => window.location.reload()} className="w-full py-4 bg-brandGreen text-white font-bold rounded-2xl shadow-lg shadow-green-900/20">Отлично</button>
+          </div>
+        </div>
+      )}
+
+      {/* Индикаторы загрузки */}
+      {(isCompressing || isSearching) && (
+        <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center rounded-3xl">
+          <Loader2 className="w-10 h-10 text-brandGreen animate-spin mb-3" />
+          <p className="text-slate-700 font-semibold">{isSearching ? 'Связь с облаком...' : 'Сжатие файлов...'}</p>
+        </div>
+      )}
+
+      {/* Линия прогресса */}
       <div className="bg-slate-50 p-4 border-b border-slate-100 flex justify-between px-8 sm:px-12">
         {steps.map((s) => (
           <div key={s.id} className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-all ${currentStep >= s.id ? 'bg-brandGreen border-brandGreen text-white' : 'bg-white border-slate-200 text-slate-400'}`}>
@@ -137,23 +194,37 @@ export default function RegistrationFlow() {
       </div>
 
       <div className="p-6 sm:p-8">
+        
+        {/* ШАГ 1 */}
         {currentStep === 1 && (
-            <div className="space-y-4 animate-in slide-in-from-bottom-2">
-                <h3 className="font-bold text-lg text-slate-800">Кто собственник ТС?</h3>
-                <SelectionCard active={clientType === 'individual'} onClick={() => setClientType('individual')} icon={<User />} title="Физическое лицо" desc="Частный владелец" />
-                <SelectionCard active={clientType === 'legal'} onClick={() => setClientType('legal')} icon={<Briefcase />} title="Юридическое лицо / ИП" desc="На компанию" />
+            <div className="space-y-6 animate-in slide-in-from-bottom-2">
+                <div className="space-y-3">
+                    <h3 className="font-bold text-lg text-slate-800">Начните с номера авто</h3>
+                    <div className="relative">
+                        <Input label="Гос. номер автомобиля (необязательно)" value={formData.licensePlate} onChange={() => {}} onInput={handlePlateInput} placeholder="А 123 АА / 77" isMono />
+                        <button onClick={checkExistingApplication} className="absolute right-3 bottom-3 p-2 bg-brandGreen text-white rounded-xl shadow-md hover:scale-105 active:scale-95 transition-all"><RotateCw size={20} className={isSearching ? 'animate-spin' : ''} /></button>
+                    </div>
+                </div>
+                <hr className="border-slate-100" />
+                <div className="space-y-4">
+                    <h3 className="font-bold text-lg text-slate-800">Кто собственник ТС?</h3>
+                    <SelectionCard active={clientType === 'individual'} onClick={() => setClientType('individual')} icon={<User />} title="Физическое лицо" desc="Частный владелец" />
+                    <SelectionCard active={clientType === 'legal'} onClick={() => setClientType('legal')} icon={<Briefcase />} title="Юридическое лицо / ИП" desc="На компанию" />
+                </div>
             </div>
         )}
 
+        {/* ШАГ 2 */}
         {currentStep === 2 && (
           <div className="space-y-5 animate-in slide-in-from-bottom-2">
-            <h3 className="font-bold text-lg text-slate-800">Данные автомобиля</h3>
-            <Input label="Гос. номер автомобиля" value={formData.licensePlate} onInput={handlePlateInput} placeholder="А 123 АА / 77" isMono />
+            <h3 className="font-bold text-lg text-slate-800">Персональные данные</h3>
+            <Input label="Гос. номер автомобиля (ОБЯЗАТЕЛЬНО)" value={formData.licensePlate} onChange={() => {}} onInput={handlePlateInput} placeholder="А 123 АА / 77" isMono />
             {clientType === 'legal' && <Input label="Название компании" value={formData.companyName} onChange={v => setFormData({...formData, companyName: v})} placeholder="ООО Элит Газ" />}
-            <Input label="ФИО собственника полностью" value={formData.fullName} onChange={v => setFormData({...formData, fullName: v})} placeholder="Иванов Иван Иванович" />
+            <Input label={clientType === 'legal' ? "ФИО представителя" : "ФИО собственника полностью"} value={formData.fullName} onChange={v => setFormData({...formData, fullName: v})} placeholder="Иванов Иван Иванович" />
           </div>
         )}
 
+        {/* ШАГ 3 */}
         {currentStep === 3 && (
             <div className="space-y-4 animate-in slide-in-from-bottom-2">
                 <h3 className="font-bold text-lg text-slate-800">Что оформляем?</h3>
@@ -162,41 +233,38 @@ export default function RegistrationFlow() {
             </div>
         )}
 
-        {/* ШАГ 4: ЗАГРУЗКА С ПОЛОСКОЙ ПРОГРЕССА */}
+        {/* ШАГ 4 */}
         {currentStep === 4 && (
           <div className="space-y-4 animate-in slide-in-from-bottom-2">
-            <h3 className="font-bold text-lg text-slate-800">Загрузите документы</h3>
-            {['passport', 'snils', 'sts', 'pts'].map(cat => (
-                <UploadCard 
-                    key={cat}
-                    title={cat === 'passport' ? 'Паспорт' : cat.toUpperCase()}
-                    desc="Нажмите на иконку для выбора"
-                    files={files[cat]}
-                    status={uploadStatus[cat]}
-                    progress={uploadProgress[cat]}
-                    onUpload={(e) => handleFileChange(e, cat)}
-                    onStartUpload={() => uploadCategory(cat)}
-                    onRemove={(i) => setFiles({...files, [cat]: files[cat].filter((_,idx)=>idx!==i)})}
-                />
-            ))}
+            <h3 className="font-bold text-lg text-slate-800">Загрузите фотографии или PDF</h3>
+            <UploadCard title="Паспорт собственника" desc="2 разворота" files={files.passport} existing={existingCloudFiles.passport} onUpload={e => handleFileChange(e, 'passport')} onRemove={i => setFiles({...files, passport: files.passport.filter((_,idx)=>idx!==i)})} />
+            <UploadCard title="СНИЛС" desc="Лицевая сторона" files={files.snils} existing={existingCloudFiles.snils} onUpload={e => handleFileChange(e, 'snils')} onRemove={i => setFiles({...files, snils: files.snils.filter((_,idx)=>idx!==i)})} />
+            <UploadCard title="СТС" desc="Обе стороны" files={files.sts} existing={existingCloudFiles.sts} onUpload={e => handleFileChange(e, 'sts')} onRemove={i => setFiles({...files, sts: files.sts.filter((_,idx)=>idx!==i)})} />
+            <UploadCard title="ПТС" desc="Все страницы" files={files.pts} existing={existingCloudFiles.pts} onUpload={e => handleFileChange(e, 'pts')} onRemove={i => setFiles({...files, pts: files.pts.filter((_,idx)=>idx!==i)})} />
           </div>
         )}
 
+        {/* ШАГ 5 */}
         {currentStep === 5 && (
           <div className="space-y-4">
             <h3 className="font-bold text-lg text-slate-800">Тип переоборудования</h3>
-            <textarea className="w-full h-44 p-5 border border-slate-200 rounded-2xl outline-none focus:border-brandGreen bg-slate-50/30 text-slate-700" value={formData.conversionType} onChange={e => setFormData({...formData, conversionType: e.target.value})} />
+            <textarea className="w-full h-44 p-5 border border-slate-200 rounded-2xl outline-none focus:border-brandGreen bg-slate-50/30 text-slate-700 leading-relaxed" value={formData.conversionType} onChange={e => setFormData({...formData, conversionType: e.target.value})} />
           </div>
         )}
 
+        {/* Навигация */}
         <div className="mt-8 flex gap-3">
-          {currentStep > 1 && <button onClick={() => setCurrentStep(prev => prev - 1)} className="px-6 py-4 rounded-2xl border border-slate-200 font-bold text-slate-500">Назад</button>}
+          {currentStep > 1 && <button onClick={() => setCurrentStep(prev => prev - 1)} className="px-6 py-4 rounded-2xl border border-slate-200 font-bold text-slate-500 hover:bg-slate-50 transition-all">Назад</button>}
           <button onClick={() => {
-            if (currentStep === 2 && (!formData.fullName || !formData.licensePlate)) return showAlert("Внимание", "Заполните все данные", "info");
-            if (currentStep < 5) setCurrentStep(prev => prev + 1); 
-            else handleFinalSubmit();
+            if (currentStep === 1) { setCurrentStep(2); return; }
+            if (currentStep === 2) {
+                if (!formData.licensePlate.trim() || formData.licensePlate.length < 6) return showAlert("Ошибка", "Введите корректный гос. номер автомобиля", "error");
+                if (clientType === 'legal' && !formData.companyName) return showAlert("Внимание", "Пожалуйста, укажите название компании", "info");
+                if (!validateFullName(formData.fullName)) return showAlert("Неверный формат", "Заполните ФИО полностью на русском языке (как в паспорте)", "error");
+            }
+            if (currentStep < 5) setCurrentStep(prev => prev + 1); else handleSubmit();
           }} className="flex-1 py-4 bg-brandGreen text-white font-bold rounded-2xl shadow-lg">
-            {isSubmitting ? <Loader2 className="animate-spin mx-auto" /> : (currentStep === 5 ? 'Завершить оформление' : 'Далее')}
+            {isSubmitting ? <Loader2 className="animate-spin mx-auto" /> : (currentStep === 5 ? 'Отправить документы' : 'Далее')}
           </button>
         </div>
       </div>
@@ -204,116 +272,54 @@ export default function RegistrationFlow() {
   );
 }
 
-// ОБНОВЛЕННЫЙ ВЕРХНИЙ КОМПОНЕНТ КАРТОЧКИ ЗАГРУЗКИ
-function UploadCard({ title, desc, files, status, progress, onUpload, onStartUpload, onRemove }) {
+// Вспомогательные компоненты
+function SelectionCard({ active, onClick, icon, title, desc }) {
   return (
-    <div className="border border-slate-200 rounded-2xl p-4 bg-slate-50/40 relative overflow-hidden">
-      
-      {/* Полоска прогресса снизу */}
-      {status === 'uploading' && (
-          <div className="absolute bottom-0 left-0 h-1 bg-green-500 transition-all duration-300" style={{ width: `${progress}%` }}></div>
-      )}
-
-      <div className="flex justify-between items-start">
-        <div>
-          <div className="flex items-center gap-2">
-            <div className="font-bold text-slate-800 text-sm">{title}</div>
-            {status === 'success' && <CheckCircle2 size={16} className="text-brandGreen animate-in zoom-in" />}
-          </div>
-          <div className="text-[10px] text-slate-400 uppercase font-bold mt-1">{desc}</div>
-        </div>
-
-        <div className="flex gap-2">
-            {/* Кнопка выбора файла */}
-            {status !== 'success' && (
-                <label className="bg-white p-2.5 rounded-xl shadow-sm border border-slate-100 cursor-pointer text-slate-500 hover:text-brandGreen active:scale-95 transition-all">
-                    <Paperclip size={20} />
-                    <input type="file" multiple className="hidden" onChange={onUpload} accept="image/*,.pdf" />
-                </label>
-            )}
-
-            {/* Кнопка СТАРТА ЗАГРУЗКИ (Появляется когда файлы выбраны) */}
-            {files.length > 0 && status === 'idle' && (
-                <button 
-                    onClick={onStartUpload}
-                    className="bg-brandGreen p-2.5 rounded-xl shadow-md text-white hover:opacity-90 active:scale-95 transition-all flex items-center gap-2 px-4"
-                >
-                    <UploadCloud size={20} />
-                    <span className="text-xs font-bold uppercase">Загрузить</span>
-                </button>
-            )}
-        </div>
-      </div>
-
-      {/* Список файлов */}
-      <div className="flex flex-wrap gap-2 mt-3">
-        {files.map((f, i) => (
-            <div key={i} className={`px-2.5 py-1.5 rounded-xl text-[10px] flex items-center gap-2 border transition-all ${status === 'success' ? 'bg-green-50 border-green-100 text-green-700' : 'bg-white border-slate-200 text-slate-600'}`}>
-                <span className="truncate max-w-[120px] font-medium">{f.name}</span>
-                {status === 'idle' && (
-                    <button onClick={() => onRemove(i)} className="text-red-400 hover:text-red-600 font-bold p-1">✕</button>
-                )}
-            </div>
-        ))}
+    <div onClick={onClick} className={`p-4 rounded-2xl border-2 cursor-pointer flex items-center gap-4 transition-all ${active ? 'border-brandGreen bg-green-50 shadow-sm' : 'border-slate-100 bg-white hover:border-slate-200'}`}>
+      <div className={`p-3 rounded-xl ${active ? 'bg-brandGreen text-white' : 'bg-slate-100 text-slate-400'}`}>{icon}</div>
+      <div className="flex-1">
+        <div className="font-bold text-slate-800 text-sm">{title}</div>
+        <div className="text-[11px] text-slate-500 leading-tight">{desc}</div>
       </div>
     </div>
   );
 }
 
-// Маленькие вспомогательные компоненты для чистоты кода
-function SelectionCard({ active, onClick, icon, title, desc }) {
-    return (
-      <div onClick={onClick} className={`p-4 rounded-2xl border-2 cursor-pointer flex items-center gap-4 transition-all ${active ? 'border-brandGreen bg-green-50' : 'border-slate-100 bg-white hover:border-slate-200'}`}>
-        <div className={`p-3 rounded-xl ${active ? 'bg-brandGreen text-white' : 'bg-slate-100 text-slate-400'}`}>{icon}</div>
-        <div className="flex-1">
-          <div className="font-bold text-slate-800 text-sm">{title}</div>
-          <div className="text-[11px] text-slate-500">{desc}</div>
-        </div>
-      </div>
-    );
-}
-
 function Input({ label, value, onChange, onInput, placeholder, isMono }) {
-    return (
-      <div className="space-y-1.5">
-        <label className="text-[10px] font-bold text-slate-400 uppercase ml-1 tracking-wider">{label}</label>
-        <input type="text" value={value} onInput={onInput} onChange={e => onChange && onChange(e.target.value)} placeholder={placeholder} className={`w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:border-brandGreen transition-all ${isMono ? 'font-mono text-lg tracking-widest' : ''}`} />
+  return (
+    <div className="space-y-1.5">
+      <label className="text-[10px] font-bold text-slate-400 uppercase ml-1 tracking-wider">{label}</label>
+      <input type="text" value={value} onInput={onInput} onChange={e => onChange(e.target.value)} placeholder={placeholder} className={`w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:border-brandGreen transition-all ${isMono ? 'font-mono text-lg tracking-widest' : ''}`} />
+    </div>
+  );
+}
+
+function UploadCard({ title, desc, files, existing, onUpload, onRemove }) {
+  return (
+    <div className="border border-slate-200 rounded-2xl p-4 bg-slate-50/40">
+      <div className="flex justify-between items-start mb-3">
+        <div>
+          <div className="font-bold text-slate-800 text-sm leading-none">{title}</div>
+          <div className="text-[10px] text-slate-400 uppercase font-bold mt-1 tracking-tight">{desc}</div>
+        </div>
+        <div className="flex gap-2">
+            <label className="bg-white p-2.5 rounded-xl shadow-sm border border-slate-100 cursor-pointer text-slate-500 hover:text-brandGreen"><Paperclip size={20} /><input type="file" multiple className="hidden" onChange={onUpload} accept="image/*,.pdf" /></label>
+            <label className="sm:hidden bg-white p-2.5 rounded-xl shadow-sm border border-slate-100 cursor-pointer text-brandGreen"><Camera size={20} /><input type="file" className="hidden" onChange={onUpload} accept="image/*" capture="environment" /></label>
+        </div>
       </div>
-    );
-}
-
-function Modal({ data, onClose }) {
-    return (
-        <div className="absolute inset-0 bg-[#111827]/40 backdrop-blur-md z-[200] flex items-center justify-center p-6 animate-in fade-in duration-200">
-            <div className="bg-white rounded-[40px] p-8 w-full max-w-sm text-center shadow-2xl">
-                <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 ${data.type === 'error' ? 'bg-red-100 text-red-500' : 'bg-blue-100 text-blue-500'}`}>
-                    {data.type === 'error' ? <AlertCircle size={32} /> : <Info size={32} />}
-                </div>
-                <h3 className="text-xl font-bold text-slate-800 mb-2">{data.title}</h3>
-                <p className="text-slate-500 text-sm mb-8">{data.message}</p>
-                <button onClick={onClose} className="w-full py-4 bg-slate-900 text-white font-bold rounded-2xl">Понятно</button>
+      <div className="flex flex-wrap gap-2">
+        {existing && existing.map((name, i) => (
+            <div key={i} className="bg-green-50 border border-green-200 px-2.5 py-1.5 rounded-xl text-[10px] text-green-700 flex items-center gap-1 font-semibold animate-in zoom-in-95">
+                <Check size={10} strokeWidth={3} /> {name}
             </div>
-        </div>
-    );
-}
-
-function Loader({ label }) {
-    return (
-        <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center rounded-3xl">
-          <Loader2 className="w-10 h-10 text-brandGreen animate-spin mb-3" />
-          <p className="text-slate-700 font-semibold">{label}</p>
-        </div>
-    );
-}
-
-function SuccessModal() {
-    return (
-        <div className="absolute inset-0 bg-[#111827]/90 backdrop-blur-md z-[100] flex items-center justify-center p-6 animate-in fade-in">
-          <div className="bg-white rounded-[40px] p-10 w-full max-w-sm text-center shadow-2xl">
-            <div className="w-20 h-20 bg-green-100 text-brandGreen rounded-full flex items-center justify-center mx-auto mb-6"><CheckCircle2 size={48} /></div>
-            <p className="text-xl font-bold text-slate-800 mb-8">Заявка принята в работу!</p>
-            <button onClick={() => window.location.reload()} className="w-full py-4 bg-brandGreen text-white font-bold rounded-2xl shadow-lg shadow-green-900/20">Отлично</button>
-          </div>
-        </div>
-    );
+        ))}
+        {files.map((f, i) => (
+            <div key={i} className="bg-white border border-brandGreen/20 px-2.5 py-1.5 rounded-xl text-[10px] flex items-center gap-2 shadow-sm animate-in zoom-in-95">
+                <span className="truncate max-w-[100px] font-medium">{f.name}</span>
+                <button onClick={() => onRemove(i)} className="text-red-400 font-bold p-1">✕</button>
+            </div>
+        ))}
+      </div>
+    </div>
+  );
 }
