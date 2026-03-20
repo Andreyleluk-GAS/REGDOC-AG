@@ -168,6 +168,28 @@ export default function RegistrationFlow() {
     setFormData({ ...formData, licensePlate: f });
   };
 
+  const handleFullNameChange = (val) => {
+    const enToRu = {
+        'q':'й', 'w':'ц', 'e':'у', 'r':'к', 't':'е', 'y':'н', 'u':'г', 'i':'ш', 'o':'щ', 'p':'з', '[':'х', ']':'ъ',
+        'a':'ф', 's':'ы', 'd':'в', 'f':'а', 'g':'п', 'h':'р', 'j':'о', 'k':'л', 'l':'д', ';':'ж', "'":'э',
+        'z':'я', 'x':'ч', 'c':'с', 'v':'м', 'b':'и', 'n':'т', 'm':'ь', ',':'б', '.':'ю', '`':'ё',
+        'Q':'Й', 'W':'Ц', 'E':'У', 'R':'К', 'T':'Е', 'Y':'Н', 'U':'Г', 'I':'Ш', 'O':'Щ', 'P':'З', '{':'Х', '}':'Ъ',
+        'A':'Ф', 'S':'Ы', 'D':'В', 'F':'А', 'G':'П', 'H':'Р', 'J':'О', 'K':'Л', 'L':'Д', ':':'Ж', '"':'Э',
+        'Z':'Я', 'X':'Ч', 'C':'С', 'V':'М', 'B':'И', 'N':'Т', 'M':'Ь', '<':'Б', '>':'Ю', '~':'Ё'
+    };
+    let translated = '';
+    for(let i=0; i<val.length; i++) {
+        translated += enToRu[val[i]] || val[i];
+    }
+    let clean = translated.replace(/[^А-Яа-яЁё\s]/g, '');
+    let formatted = clean.split(' ').map(word => {
+        if (!word) return '';
+        return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+    }).join(' ');
+    
+    setFormData({ ...formData, fullName: formatted });
+  };
+
   const handleFileChange = async (e, category) => {
     const selected = Array.from(e.target.files);
     if (!selected.length) return;
@@ -371,7 +393,7 @@ export default function RegistrationFlow() {
             <h3 className="font-bold text-lg text-slate-800">Персональные данные</h3>
             <Input label="Гос. номер автомобиля (ОБЯЗАТЕЛЬНО)" value={formData.licensePlate} onChange={() => {}} onInput={handlePlateInput} placeholder="А 123 АА / 77" isMono />
             {clientType === 'legal' && <Input label="Название компании" value={formData.companyName} onChange={v => setFormData({...formData, companyName: v})} placeholder="ООО Элит Газ" />}
-            <Input label={clientType === 'legal' ? "ФИО представителя" : "ФИО собственника полностью"} value={formData.fullName} onChange={v => setFormData({...formData, fullName: v})} placeholder="Иванов Иван Иванович" />
+            <Input label={clientType === 'legal' ? "ФИО представителя" : "ФИО собственника полностью"} value={formData.fullName} onChange={handleFullNameChange} placeholder="Иванов Иван Иванович" />
           </div>
         )}
 
