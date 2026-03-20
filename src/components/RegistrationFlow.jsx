@@ -324,8 +324,9 @@ export default function RegistrationFlow() {
             <h3 className="text-xl font-bold text-slate-800 mb-2">Отменить заявку?</h3>
             <p className="text-slate-500 text-sm mb-8">Вы хотите завершить отправку (сохранить загруженные файлы) или отменить и полностью удалить всю папку с сервера?</p>
             <div className="space-y-3">
-                <button onClick={() => setShowExitPrompt(false)} className="w-full py-4 bg-brandGreen text-white font-bold rounded-2xl hover:opacity-90">Завершить отправку</button>
-                <button onClick={handleAbortAndClean} disabled={isSubmitting} className="w-full py-4 bg-red-50 text-red-600 font-bold rounded-2xl hover:bg-red-100">{isSubmitting ? <Loader2 className="animate-spin mx-auto" /> : "Удалить заявку и выйти"}</button>
+                <button onClick={() => setShowExitPrompt(false)} className="w-full py-4 bg-brandGreen text-white font-bold rounded-2xl hover:opacity-90 transition-all">Завершить отправку</button>
+                <button onClick={() => setShowExitPrompt(false)} className="w-full py-4 bg-slate-100 text-slate-600 font-bold rounded-2xl hover:bg-slate-200 transition-all">Назад</button>
+                <button onClick={handleAbortAndClean} disabled={isSubmitting} className="w-full py-4 bg-red-50 text-red-600 font-bold rounded-2xl hover:bg-red-100 transition-all">{isSubmitting ? <Loader2 className="animate-spin mx-auto" /> : "Удалить заявку и выйти"}</button>
             </div>
           </div>
         </div>
@@ -444,16 +445,19 @@ export default function RegistrationFlow() {
           </div>
         )}
 
-        {/* ИЗМЕНЕН ТОЛЬКО ЭТОТ БЛОК КНОПОК */}
         <div className="mt-8 flex flex-col gap-4">
           <div className="flex gap-3">
-            {currentStep > 1 && (
+            {currentStep > 1 && currentStep < 5 && (
               <button onClick={() => {
                   if (currentStep === 4 && isAnyFileUploading) {
                       return showAlert("Загрузка файлов", "Пожалуйста, дождитесь окончания загрузки файлов перед переходом на другой этап.", "info");
                   }
                   setCurrentStep(prev => prev - 1);
               }} className="px-6 py-4 rounded-2xl border border-slate-200 font-bold text-slate-500 hover:bg-slate-50 transition-all">Назад</button>
+            )}
+
+            {currentStep === 5 && (
+              <button onClick={() => setCurrentStep(prev => prev - 1)} className="px-6 py-4 rounded-2xl border border-slate-200 font-bold text-slate-500 hover:bg-slate-50 transition-all">Назад</button>
             )}
 
             <button onClick={handleNextStep} disabled={isSubmitting} className="flex-1 py-4 bg-brandGreen text-white font-bold rounded-2xl shadow-lg flex items-center justify-center">
