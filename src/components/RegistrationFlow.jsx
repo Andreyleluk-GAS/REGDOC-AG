@@ -17,11 +17,13 @@ export default function RegistrationFlow() {
   const [showSuccess, setShowSuccess] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   
-  // Состояние для нашего универсального модального окна
   const [modal, setModal] = useState({ show: false, title: '', message: '', type: 'info' });
-
   const [searchCache, setSearchCache] = useState(null);
   const [showDecision, setShowDecision] = useState(false);
+
+  // --- ДОБАВЛЕНО: Состояния для 5 этапа (Описание)
+  const [hasExistingDescription, setHasExistingDescription] = useState(false);
+  const [isDescriptionEditable, setIsDescriptionEditable] = useState(true);
 
   const [clientType, setClientType] = useState('individual');
   const [docType, setDocType] = useState('pz');
@@ -47,7 +49,6 @@ export default function RegistrationFlow() {
       }, 200);
   };
 
-  // Функция для вызова стильного уведомления
   const showAlert = (title, message, type = 'info') => {
     setModal({ show: true, title, message, type });
   };
@@ -82,10 +83,20 @@ export default function RegistrationFlow() {
     if (choice === 'continue') {
       setFormData(prev => ({ ...prev, fullName: searchCache.fullName }));
       if (searchCache.existingFiles) setExistingCloudFiles(searchCache.existingFiles);
+      
+      // --- ДОБАВЛЕНО: Блокируем описание, если оно уже было в облаке
+      if (searchCache.hasDescription) {
+          setHasExistingDescription(true);
+          setIsDescriptionEditable(false);
+      }
     } else {
       setFormData(prev => ({ ...prev, fullName: '', companyName: '' }));
       setFiles({ passport: [], snils: [], sts: [], pts: [] });
       setExistingCloudFiles({ passport: [], snils: [], sts: [], pts: [] });
+      
+      // --- ДОБАВЛЕНО: Сбрасываем блокировку описания для новой заявки
+      setHasExistingDescription(false);
+      setIsDescriptionEditable(true);
     }
     setShowDecision(false);
     setCurrentStep(2);
@@ -143,6 +154,10 @@ export default function RegistrationFlow() {
     const data = new FormData();
     Object.entries(formData).forEach(([k,v]) => data.append(k,v));
     data.append('clientType', clientType); data.append('docType', docType);
+    
+    // --- ДОБАВЛЕНО: Флаг для сервера (создавать ли новый docx)
+    data.append('updateDescription', (!hasExistingDescription || isDescriptionEditable).toString());
+
     Object.keys(files).forEach(cat => files[cat].forEach(f => data.append(cat, f)));
     try {
       const res = await fetch('/api/upload', { method: 'POST', body: data });
@@ -156,7 +171,6 @@ export default function RegistrationFlow() {
   return (
     <div className="bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden max-w-2xl mx-auto relative min-h-[500px]">
       
-      {/* 🛠 УНИВЕРСАЛЬНОЕ СТИЛЬНОЕ УВЕДОМЛЕНИЕ (Вместо alert) */}
       {modal.show && (
         <div className="absolute inset-0 bg-[#111827]/40 backdrop-blur-md z-[200] flex items-center justify-center p-6 animate-in fade-in zoom-in-95 duration-200">
           <div className="bg-white rounded-[40px] p-8 w-full max-w-sm text-center shadow-2xl border-t-4 border-slate-100">
@@ -175,7 +189,6 @@ export default function RegistrationFlow() {
         </div>
       )}
 
-      {/* Окно Решения (Продолжить/Новая) */}
       {showDecision && (
         <div className="absolute inset-0 bg-[#111827]/95 backdrop-blur-md z-[110] flex items-center justify-center p-6 animate-in zoom-in-95">
           <div className="bg-white rounded-[40px] p-8 w-full max-w-md shadow-2xl">
@@ -190,7 +203,6 @@ export default function RegistrationFlow() {
         </div>
       )}
 
-      {/* Окно Успеха */}
       {showSuccess && (
         <div className="absolute inset-0 bg-[#111827]/90 backdrop-blur-md z-[100] flex items-center justify-center p-6 animate-in fade-in">
           <div className="bg-white rounded-[40px] p-10 w-full max-w-sm text-center shadow-2xl">
@@ -202,7 +214,6 @@ export default function RegistrationFlow() {
         </div>
       )}
 
-      {/* Индикаторы загрузки */}
       {(isCompressing || isSearching) && (
         <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center rounded-3xl">
           <Loader2 className="w-10 h-10 text-brandGreen animate-spin mb-3" />
@@ -210,7 +221,6 @@ export default function RegistrationFlow() {
         </div>
       )}
 
-      {/* Линия прогресса */}
       <div className="bg-slate-50 p-4 border-b border-slate-100 flex justify-between px-8 sm:px-12">
         {steps.map((s) => (
           <div key={s.id} className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-all ${currentStep >= s.id ? 'bg-brandGreen border-brandGreen text-white' : 'bg-white border-slate-200 text-slate-400'}`}>
@@ -221,7 +231,6 @@ export default function RegistrationFlow() {
 
       <div className="p-6 sm:p-8">
         
-        {/* ШАГ 1 */}
         {currentStep === 1 && (
             <div className="space-y-6 animate-in slide-in-from-bottom-2">
                 <div className="space-y-3">
@@ -240,7 +249,6 @@ export default function RegistrationFlow() {
             </div>
         )}
 
-        {/* ШАГ 2 */}
         {currentStep === 2 && (
           <div className="space-y-5 animate-in slide-in-from-bottom-2">
             <h3 className="font-bold text-lg text-slate-800">Персональные данные</h3>
@@ -250,7 +258,6 @@ export default function RegistrationFlow() {
           </div>
         )}
 
-        {/* ШАГ 3 */}
         {currentStep === 3 && (
             <div className="space-y-4 animate-in slide-in-from-bottom-2">
                 <h3 className="font-bold text-lg text-slate-800">Что оформляем?</h3>
@@ -259,7 +266,6 @@ export default function RegistrationFlow() {
             </div>
         )}
 
-        {/* ШАГ 4 */}
         {currentStep === 4 && (
           <div className="space-y-4 animate-in slide-in-from-bottom-2">
             <h3 className="font-bold text-lg text-slate-800">Загрузите фотографии или PDF</h3>
@@ -270,15 +276,29 @@ export default function RegistrationFlow() {
           </div>
         )}
 
-        {/* ШАГ 5 */}
+        {/* --- ДОБАВЛЕНО: ШАГ 5 ИЗМЕНЕН --- */}
         {currentStep === 5 && (
           <div className="space-y-4">
-            <h3 className="font-bold text-lg text-slate-800">Тип переоборудования</h3>
-            <textarea className="w-full h-44 p-5 border border-slate-200 rounded-2xl outline-none focus:border-brandGreen bg-slate-50/30 text-slate-700 leading-relaxed" value={formData.conversionType} onChange={e => setFormData({...formData, conversionType: e.target.value})} />
+            <div className="flex justify-between items-center mb-2">
+                <h3 className="font-bold text-lg text-slate-800">Тип переоборудования</h3>
+                {hasExistingDescription && !isDescriptionEditable && (
+                    <button 
+                        onClick={() => setIsDescriptionEditable(true)}
+                        className="px-4 py-1.5 bg-slate-100 text-slate-600 font-bold rounded-xl shadow-sm hover:bg-slate-200 transition-all text-[11px] uppercase tracking-wider"
+                    >
+                        Изменить
+                    </button>
+                )}
+            </div>
+            <textarea 
+                className={`w-full h-44 p-5 rounded-2xl outline-none focus:border-brandGreen leading-relaxed transition-all ${!isDescriptionEditable ? 'bg-slate-100/50 border border-slate-200 text-slate-400 cursor-not-allowed' : 'bg-slate-50/30 border border-slate-200 text-slate-700'}`} 
+                value={formData.conversionType} 
+                onChange={e => setFormData({...formData, conversionType: e.target.value})} 
+                disabled={!isDescriptionEditable}
+            />
           </div>
         )}
 
-        {/* Навигация */}
         <div className="mt-8 flex gap-3">
           {currentStep > 1 && <button onClick={() => setCurrentStep(prev => prev - 1)} className="px-6 py-4 rounded-2xl border border-slate-200 font-bold text-slate-500 hover:bg-slate-50 transition-all">Назад</button>}
           <button onClick={() => {
