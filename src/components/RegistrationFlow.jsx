@@ -29,6 +29,23 @@ export default function RegistrationFlow() {
   
   const [files, setFiles] = useState({ passport: [], snils: [], sts: [], pts: [] });
   const [existingCloudFiles, setExistingCloudFiles] = useState({ passport: [], snils: [], sts: [], pts: [] });
+  const [fileStatuses, setFileStatuses] = useState({});
+
+  const handleSimulateUpload = (file) => {
+      const key = file.name + file.size;
+      setFileStatuses(prev => ({ ...prev, [key]: { state: 'uploading', progress: 0 } }));
+      let progress = 0;
+      const interval = setInterval(() => {
+          progress += Math.floor(Math.random() * 20) + 10;
+          if (progress >= 100) {
+              progress = 100;
+              clearInterval(interval);
+              setFileStatuses(prev => ({ ...prev, [key]: { state: 'done', progress: 100 } }));
+          } else {
+              setFileStatuses(prev => ({ ...prev, [key]: { state: 'uploading', progress } }));
+          }
+      }, 200);
+  };
 
   // Функция для вызова стильного уведомления
   const showAlert = (title, message, type = 'info') => {
@@ -108,6 +125,15 @@ export default function RegistrationFlow() {
         return null;
       }));
       const valid = processed.filter(f => f !== null);
+      
+      setFileStatuses(prev => {
+          const nextStats = { ...prev };
+          valid.forEach(f => {
+              nextStats[f.name + f.size] = { state: 'pending', progress: 0 };
+          });
+          return nextStats;
+      });
+
       setFiles(prev => ({ ...prev, [category]: [...prev[category], ...valid] }));
     } finally { setIsCompressing(false); e.target.value = ''; }
   };
@@ -237,10 +263,10 @@ export default function RegistrationFlow() {
         {currentStep === 4 && (
           <div className="space-y-4 animate-in slide-in-from-bottom-2">
             <h3 className="font-bold text-lg text-slate-800">Загрузите фотографии или PDF</h3>
-            <UploadCard title="Паспорт собственника" desc="2 разворота" files={files.passport} existing={existingCloudFiles.passport} onUpload={e => handleFileChange(e, 'passport')} onRemove={i => setFiles({...files, passport: files.passport.filter((_,idx)=>idx!==i)})} />
-            <UploadCard title="СНИЛС" desc="Лицевая сторона" files={files.snils} existing={existingCloudFiles.snils} onUpload={e => handleFileChange(e, 'snils')} onRemove={i => setFiles({...files, snils: files.snils.filter((_,idx)=>idx!==i)})} />
-            <UploadCard title="СТС" desc="Обе стороны" files={files.sts} existing={existingCloudFiles.sts} onUpload={e => handleFileChange(e, 'sts')} onRemove={i => setFiles({...files, sts: files.sts.filter((_,idx)=>idx!==i)})} />
-            <UploadCard title="ПТС" desc="Все страницы" files={files.pts} existing={existingCloudFiles.pts} onUpload={e => handleFileChange(e, 'pts')} onRemove={i => setFiles({...files, pts: files.pts.filter((_,idx)=>idx!==i)})} />
+            <UploadCard title="Паспорт собственника" desc="2 разворота" files={files.passport} existing={existingCloudFiles.passport} onUpload={e => handleFileChange(e, 'passport')} onRemove={i => setFiles({...files, passport: files.passport.filter((_,idx)=>idx!==i)})} fileStatuses={fileStatuses} onSimulateUpload={handleSimulateUpload} />
+            <UploadCard title="СНИЛС" desc="Лицевая сторона" files={files.snils} existing={existingCloudFiles.snils} onUpload={e => handleFileChange(e, 'snils')} onRemove={i => setFiles({...files, snils: files.snils.filter((_,idx)=>idx!==i)})} fileStatuses={fileStatuses} onSimulateUpload={handleSimulateUpload} />
+            <UploadCard title="СТС" desc="Обе стороны" files={files.sts} existing={existingCloudFiles.sts} onUpload={e => handleFileChange(e, 'sts')} onRemove={i => setFiles({...files, sts: files.sts.filter((_,idx)=>idx!==i)})} fileStatuses={fileStatuses} onSimulateUpload={handleSimulateUpload} />
+            <UploadCard title="ПТС" desc="Все страницы" files={files.pts} existing={existingCloudFiles.pts} onUpload={e => handleFileChange(e, 'pts')} onRemove={i => setFiles({...files, pts: files.pts.filter((_,idx)=>idx!==i)})} fileStatuses={fileStatuses} onSimulateUpload={handleSimulateUpload} />
           </div>
         )}
 
@@ -275,7 +301,7 @@ export default function RegistrationFlow() {
 // Вспомогательные компоненты
 function SelectionCard({ active, onClick, icon, title, desc }) {
   return (
-    <div onClick={onClick} className={`p-4 rounded-2xl border-2 cursor-pointer flex items-center gap-4 transition-all ${active ? 'border-brandGreen bg-green-50 shadow-sm' : 'border-slate-100 bg-white hover:border-slate-200'}`}>
+    <div onClick={onClick} className={`p-4 rounded-2xl border-2 cursor-pointer flex items-center gap-4 transition-all ${active ? 'border-brandGreen bg-green-50 shadow-sm' : 'border-slate-100 bg-white shadow-sm hover:border-slate-200'}`}>
       <div className={`p-3 rounded-xl ${active ? 'bg-brandGreen text-white' : 'bg-slate-100 text-slate-400'}`}>{icon}</div>
       <div className="flex-1">
         <div className="font-bold text-slate-800 text-sm">{title}</div>
@@ -289,12 +315,12 @@ function Input({ label, value, onChange, onInput, placeholder, isMono }) {
   return (
     <div className="space-y-1.5">
       <label className="text-[10px] font-bold text-slate-400 uppercase ml-1 tracking-wider">{label}</label>
-      <input type="text" value={value} onInput={onInput} onChange={e => onChange(e.target.value)} placeholder={placeholder} className={`w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:border-brandGreen transition-all ${isMono ? 'font-mono text-lg tracking-widest' : ''}`} />
+      <input type="text" value={value} onInput={onInput} onChange={e => onChange(e.target.value)} placeholder={placeholder} className={`w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:border-brandGreen focus:bg-white transition-all ${isMono ? 'font-mono text-lg tracking-widest' : ''}`} />
     </div>
   );
 }
 
-function UploadCard({ title, desc, files, existing, onUpload, onRemove }) {
+function UploadCard({ title, desc, files, existing, onUpload, onRemove, fileStatuses, onSimulateUpload }) {
   return (
     <div className="border border-slate-200 rounded-2xl p-4 bg-slate-50/40">
       <div className="flex justify-between items-start mb-3">
@@ -303,22 +329,43 @@ function UploadCard({ title, desc, files, existing, onUpload, onRemove }) {
           <div className="text-[10px] text-slate-400 uppercase font-bold mt-1 tracking-tight">{desc}</div>
         </div>
         <div className="flex gap-2">
-            <label className="bg-white p-2.5 rounded-xl shadow-sm border border-slate-100 cursor-pointer text-slate-500 hover:text-brandGreen"><Paperclip size={20} /><input type="file" multiple className="hidden" onChange={onUpload} accept="image/*,.pdf" /></label>
-            <label className="sm:hidden bg-white p-2.5 rounded-xl shadow-sm border border-slate-100 cursor-pointer text-brandGreen"><Camera size={20} /><input type="file" className="hidden" onChange={onUpload} accept="image/*" capture="environment" /></label>
+            <label className="bg-white p-2.5 rounded-xl shadow-sm border border-slate-100 cursor-pointer text-slate-500 hover:text-brandGreen active:scale-95 transition-all"><Paperclip size={20} /><input type="file" multiple className="hidden" onChange={onUpload} accept="image/*,.pdf" /></label>
+            <label className="sm:hidden bg-white p-2.5 rounded-xl shadow-sm border border-slate-100 cursor-pointer text-brandGreen active:scale-95 transition-all"><Camera size={20} /><input type="file" className="hidden" onChange={onUpload} accept="image/*" capture="environment" /></label>
         </div>
       </div>
       <div className="flex flex-wrap gap-2">
         {existing && existing.map((name, i) => (
             <div key={i} className="bg-green-50 border border-green-200 px-2.5 py-1.5 rounded-xl text-[10px] text-green-700 flex items-center gap-1 font-semibold animate-in zoom-in-95">
-                <Check size={10} strokeWidth={3} /> {name}
+                <Check size={10} strokeWidth={3} /> {name} (В облаке)
             </div>
         ))}
-        {files.map((f, i) => (
-            <div key={i} className="bg-white border border-brandGreen/20 px-2.5 py-1.5 rounded-xl text-[10px] flex items-center gap-2 shadow-sm animate-in zoom-in-95">
-                <span className="truncate max-w-[100px] font-medium">{f.name}</span>
-                <button onClick={() => onRemove(i)} className="text-red-400 font-bold p-1">✕</button>
-            </div>
-        ))}
+        {files.map((f, i) => {
+            const key = f.name + f.size;
+            const status = fileStatuses && fileStatuses[key] ? fileStatuses[key] : { state: 'pending', progress: 0 };
+            return (
+                <div key={i} className="bg-white border border-brandGreen/20 p-2 rounded-xl text-[10px] flex flex-col gap-1.5 shadow-sm animate-in zoom-in-95 min-w-[140px] flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                        <span className="truncate max-w-[100px] font-medium text-slate-700">{f.name}</span>
+                        <div className="flex items-center gap-1">
+                            {status.state === 'pending' && (
+                                <button onClick={() => onSimulateUpload(f)} className="text-white bg-brandGreen hover:bg-green-700 rounded-md p-0.5 transition-colors" title="Загрузить">
+                                    <Check size={12} strokeWidth={4} />
+                                </button>
+                            )}
+                            {status.state === 'done' && (
+                                <CheckCircle2 size={14} className="text-brandGreen" />
+                            )}
+                            <button onClick={() => onRemove(i)} className="text-red-400 hover:text-red-600 font-bold p-1 transition-colors" title="Удалить">✕</button>
+                        </div>
+                    </div>
+                    {status.state === 'uploading' && (
+                        <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                            <div className="bg-brandGreen h-full transition-all duration-200" style={{ width: `${status.progress}%` }}></div>
+                        </div>
+                    )}
+                </div>
+            );
+        })}
       </div>
     </div>
   );
