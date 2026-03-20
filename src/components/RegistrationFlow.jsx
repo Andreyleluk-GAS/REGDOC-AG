@@ -3,7 +3,11 @@ import { Check, ChevronRight, User, Briefcase, FileSignature, FileCheck2, Camera
 import imageCompression from 'browser-image-compression';
 
 const steps = [
-  { id: 1, title: 'Заявитель' }, { id: 2, title: 'Услуга' }, { id: 3, title: 'Данные' }, { id: 4, title: 'Документы' }, { id: 5, title: 'Описание' },
+  { id: 1, title: 'Заявитель' }, 
+  { id: 2, title: 'Данные' }, 
+  { id: 3, title: 'Услуга' }, 
+  { id: 4, title: 'Документы' }, 
+  { id: 5, title: 'Описание' },
 ];
 
 export default function RegistrationFlow() {
@@ -29,11 +33,11 @@ export default function RegistrationFlow() {
       if (data.found) {
         setFormData(prev => ({ ...prev, fullName: data.fullName }));
         if (data.existingFiles) setExistingCloudFiles(data.existingFiles);
-        alert("Заявка найдена! Данные ФИО и список загруженных файлов обновлены.");
+        alert("Заявка найдена! Данные ФИО и список загруженных файлов подгружены.");
       } else {
-        alert("Заявка с таким номером не найдена. Продолжите ввод вручную.");
+        alert("Заявка не найдена. Продолжите ввод вручную.");
       }
-    } catch (e) { alert("Ошибка при проверке номера."); }
+    } catch (e) { alert("Ошибка при проверке."); }
     finally { setIsSearching(false); }
   };
 
@@ -98,7 +102,7 @@ export default function RegistrationFlow() {
       {(isCompressing || isSearching) && (
         <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center rounded-3xl">
           <Loader2 className="w-10 h-10 text-brandGreen animate-spin mb-3" />
-          <p className="text-slate-700 font-semibold">{isSearching ? 'Проверяем номер в облаке...' : 'Сжимаем фото...'}</p>
+          <p className="text-slate-700 font-semibold">{isSearching ? 'Ищем старую заявку...' : 'Сжимаем фото...'}</p>
         </div>
       )}
 
@@ -111,24 +115,7 @@ export default function RegistrationFlow() {
       </div>
 
       <div className="p-6 sm:p-8">
-        {currentStep === 3 && (
-          <div className="space-y-5 animate-in slide-in-from-bottom-2">
-            <h3 className="font-bold text-lg text-slate-800">Заполните данные</h3>
-            <div className="relative">
-                <Input label="Гос. номер автомобиля" value={formData.licensePlate} onChange={() => {}} onInput={handlePlateInput} placeholder="А 123 АА / 77" isMono />
-                <button 
-                    onClick={checkExistingApplication}
-                    className="absolute right-3 bottom-3 p-2 bg-brandGreen text-white rounded-xl shadow-md hover:bg-green-700 transition-all"
-                    title="Проверить наличие заявки"
-                >
-                    <RotateCw size={20} className={isSearching ? 'animate-spin' : ''} />
-                </button>
-            </div>
-            {clientType === 'legal' && <Input label="Название компании" value={formData.companyName} onChange={v => setFormData({...formData, companyName: v})} placeholder="ООО Элит Газ" />}
-            <Input label={clientType === 'legal' ? "ФИО представителя" : "ФИО собственника полностью"} value={formData.fullName} onChange={v => setFormData({...formData, fullName: v})} placeholder="Иванов Иван Иванович" />
-          </div>
-        )}
-        
+        {/* ШАГ 1: ТИП СОБСТВЕННИКА */}
         {currentStep === 1 && (
             <div className="space-y-4 animate-in slide-in-from-bottom-2">
                 <h3 className="font-bold text-lg text-slate-800">Кто собственник ТС?</h3>
@@ -137,7 +124,26 @@ export default function RegistrationFlow() {
             </div>
         )}
 
+        {/* ШАГ 2: ДАННЫЕ И ПОИСК (Переехал сюда) */}
         {currentStep === 2 && (
+          <div className="space-y-5 animate-in slide-in-from-bottom-2">
+            <h3 className="font-bold text-lg text-slate-800">Данные автомобиля</h3>
+            <div className="relative">
+                <Input label="Гос. номер автомобиля" value={formData.licensePlate} onChange={() => {}} onInput={handlePlateInput} placeholder="А 123 АА / 77" isMono />
+                <button 
+                    onClick={checkExistingApplication}
+                    className="absolute right-3 bottom-3 p-2 bg-brandGreen text-white rounded-xl shadow-md hover:bg-green-700 transition-all"
+                >
+                    <RotateCw size={20} className={isSearching ? 'animate-spin' : ''} />
+                </button>
+            </div>
+            {clientType === 'legal' && <Input label="Название компании" value={formData.companyName} onChange={v => setFormData({...formData, companyName: v})} placeholder="ООО Элит Газ" />}
+            <Input label={clientType === 'legal' ? "ФИО представителя" : "ФИО собственника полностью"} value={formData.fullName} onChange={v => setFormData({...formData, fullName: v})} placeholder="Иванов Иван Иванович" />
+          </div>
+        )}
+
+        {/* ШАГ 3: ВЫБОР УСЛУГИ (Переехал сюда) */}
+        {currentStep === 3 && (
             <div className="space-y-4 animate-in slide-in-from-bottom-2">
                 <h3 className="font-bold text-lg text-slate-800">Выберите тип документа</h3>
                 <SelectionCard active={docType === 'pz'} onClick={() => setDocType('pz')} icon={<FileSignature />} title="Предварительное заключение (ПЗ)" desc="До установки ГБО" />
@@ -145,6 +151,7 @@ export default function RegistrationFlow() {
             </div>
         )}
 
+        {/* ШАГ 4: ДОКУМЕНТЫ */}
         {currentStep === 4 && (
           <div className="space-y-4 animate-in slide-in-from-bottom-2">
             <h3 className="font-bold text-lg text-slate-800">Загрузите фотографии или PDF</h3>
@@ -155,6 +162,7 @@ export default function RegistrationFlow() {
           </div>
         )}
 
+        {/* ШАГ 5: ОПИСАНИЕ */}
         {currentStep === 5 && (
           <div className="space-y-4">
             <h3 className="font-bold text-lg text-slate-800">Тип переоборудования</h3>
@@ -165,9 +173,9 @@ export default function RegistrationFlow() {
         <div className="mt-8 flex gap-3">
           {currentStep > 1 && <button onClick={() => setCurrentStep(prev => prev - 1)} className="px-6 py-4 rounded-2xl border border-slate-200 font-bold text-slate-500">Назад</button>}
           <button onClick={() => {
-            if (currentStep === 3 && (!formData.fullName || !formData.licensePlate)) return alert("Заполните данные");
+            if (currentStep === 2 && (!formData.fullName || !formData.licensePlate)) return alert("Заполните данные");
             if (currentStep < 5) setCurrentStep(prev => prev + 1); else handleSubmit();
-          }} className="flex-1 py-4 bg-brandGreen text-white font-bold rounded-2xl shadow-lg shadow-green-900/10">
+          }} className="flex-1 py-4 bg-brandGreen text-white font-bold rounded-2xl shadow-lg">
             {isSubmitting ? <Loader2 className="animate-spin mx-auto" /> : (currentStep === 5 ? 'Отправить' : 'Далее')}
           </button>
         </div>
@@ -176,6 +184,7 @@ export default function RegistrationFlow() {
   );
 }
 
+// Вспомогательные компоненты остаются без изменений...
 function SelectionCard({ active, onClick, icon, title, desc }) {
   return (
     <div onClick={onClick} className={`p-4 rounded-2xl border-2 cursor-pointer flex items-center gap-4 transition-all ${active ? 'border-brandGreen bg-green-50' : 'border-slate-100 bg-white'}`}>
@@ -221,7 +230,7 @@ function UploadCard({ title, desc, files, existing, onUpload, onRemove }) {
                 <span className="truncate max-w-[100px]">{f.name}</span>
                 <button onClick={() => onRemove(i)} className="text-red-400 font-bold">✕</button>
             </div>
-        ))}
+          ))}
       </div>
     </div>
   );
