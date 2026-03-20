@@ -16,7 +16,7 @@ export default function RegistrationFlow() {
   const [isCompressing, setIsCompressing] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
-  const [showNameError, setShowNameError] = useState(false); // Состояние для ошибки ФИО
+  const [showNameError, setShowNameError] = useState(false);
   
   const [searchCache, setSearchCache] = useState(null);
   const [showDecision, setShowDecision] = useState(false);
@@ -28,15 +28,16 @@ export default function RegistrationFlow() {
   const [files, setFiles] = useState({ passport: [], snils: [], sts: [], pts: [] });
   const [existingCloudFiles, setExistingCloudFiles] = useState({ passport: [], snils: [], sts: [], pts: [] });
 
-  // Функция валидации ФИО
   const validateFullName = (name) => {
-    // Регулярка: Минимум 2 слова, только кириллица, каждое слово с большой буквы
     const fioRegex = /^[А-ЯЁ][а-яё]+(\s+[А-ЯЁ][а-яё]+)+$/;
     return fioRegex.test(name.trim());
   };
 
   const checkExistingApplication = async () => {
-    if (!formData.licensePlate.trim()) return;
+    if (!formData.licensePlate.trim()) {
+        alert("Введите гос. номер для поиска");
+        return;
+    }
     setIsSearching(true);
     try {
       const res = await fetch(`/api/check-plate?plate=${encodeURIComponent(formData.licensePlate)}`);
@@ -112,47 +113,36 @@ export default function RegistrationFlow() {
   return (
     <div className="bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden max-w-2xl mx-auto relative">
       
-      {/* 🔴 ОКНО ОШИБКИ ФИО (НОВОЕ) */}
+      {/* Модальное окно ошибки ФИО */}
       {showNameError && (
-        <div className="absolute inset-0 bg-red-950/40 backdrop-blur-md z-[120] flex items-center justify-center p-6 animate-in fade-in duration-300">
-          <div className="bg-white rounded-[40px] p-8 w-full max-w-sm text-center shadow-2xl scale-in-center border-t-4 border-red-500">
-            <div className="w-16 h-16 bg-red-100 text-red-500 rounded-full flex items-center justify-center mx-auto mb-4">
-              <AlertCircle size={32} />
-            </div>
+        <div className="absolute inset-0 bg-red-950/40 backdrop-blur-md z-[120] flex items-center justify-center p-6 animate-in fade-in">
+          <div className="bg-white rounded-[40px] p-8 w-full max-w-sm text-center shadow-2xl border-t-4 border-red-500">
+            <div className="w-16 h-16 bg-red-100 text-red-500 rounded-full flex items-center justify-center mx-auto mb-4"><AlertCircle size={32} /></div>
             <h3 className="text-xl font-bold text-slate-800 mb-3">Неверный формат ФИО</h3>
-            <p className="text-slate-500 text-sm leading-relaxed mb-8">
-                Пожалуйста, заполните данное окно точно так же, как <b>ФИО в паспорте</b> собственника ТС (на русском языке).
-            </p>
-            <button 
-                onClick={() => setShowNameError(false)}
-                className="w-full py-4 bg-slate-900 text-white font-bold rounded-2xl hover:opacity-90 transition-all shadow-lg"
-            >
-                Понятно
-            </button>
+            <p className="text-slate-500 text-sm mb-8">Заполните окно точно так же, как <b>ФИО в паспорте</b> (на русском языке, каждое слово с большой буквы).</p>
+            <button onClick={() => setShowNameError(false)} className="w-full py-4 bg-slate-900 text-white font-bold rounded-2xl shadow-lg">Понятно</button>
           </div>
         </div>
       )}
 
-      {/* Окно Решения (Развилка) */}
+      {/* Окно выбора (Продолжить/Новая) */}
       {showDecision && (
-        <div className="absolute inset-0 bg-[#111827]/95 backdrop-blur-md z-[110] flex items-center justify-center p-6 animate-in zoom-in-95 duration-300">
+        <div className="absolute inset-0 bg-[#111827]/95 backdrop-blur-md z-[110] flex items-center justify-center p-6 animate-in zoom-in-95">
           <div className="bg-white rounded-[40px] p-8 w-full max-w-md shadow-2xl">
-            <div className="w-16 h-16 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto mb-4">
-              <History size={32} />
-            </div>
-            <h3 className="text-xl font-bold text-slate-800 text-center mb-2">Найдена прошлая заявка!</h3>
+            <div className="w-16 h-16 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto mb-4"><History size={32} /></div>
+            <h3 className="text-xl font-bold text-slate-800 text-center mb-2">Найдена заявка!</h3>
             <p className="text-slate-500 text-center text-sm mb-8">Для автомобиля <b>{formData.licensePlate}</b>. Как поступим?</p>
             <div className="space-y-3">
-                <button onClick={() => handleDecision('continue')} className="w-full py-4 bg-brandGreen text-white font-bold rounded-2xl flex items-center justify-center gap-2 transition-all"><RotateCw size={18} /> Продолжить</button>
-                <button onClick={() => handleDecision('new')} className="w-full py-4 bg-slate-100 text-slate-600 font-bold rounded-2xl flex items-center justify-center gap-2 transition-all"><PlusCircle size={18} /> Создать новую</button>
+                <button onClick={() => handleDecision('continue')} className="w-full py-4 bg-brandGreen text-white font-bold rounded-2xl flex items-center justify-center gap-2"><RotateCw size={18} /> Продолжить</button>
+                <button onClick={() => handleDecision('new')} className="w-full py-4 bg-slate-100 text-slate-600 font-bold rounded-2xl flex items-center justify-center gap-2"><PlusCircle size={18} /> Создать новую</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Окно Успеха */}
+      {/* Успех */}
       {showSuccess && (
-        <div className="absolute inset-0 bg-[#111827]/90 backdrop-blur-sm z-[100] flex items-center justify-center p-6 animate-in fade-in">
+        <div className="absolute inset-0 bg-[#111827]/90 backdrop-blur-md z-[100] flex items-center justify-center p-6 animate-in fade-in">
           <div className="bg-white rounded-[40px] p-10 w-full max-w-sm text-center shadow-2xl">
             <div className="w-20 h-20 bg-green-100 text-brandGreen rounded-full flex items-center justify-center mx-auto mb-6"><CheckCircle2 size={48} /></div>
             <h3 className="text-slate-400 text-[10px] font-bold uppercase tracking-[0.2em] mb-2">Ответ от регистратора:</h3>
@@ -162,7 +152,7 @@ export default function RegistrationFlow() {
         </div>
       )}
 
-      {/* Лоадер */}
+      {/* Загрузка */}
       {(isCompressing || isSearching) && (
         <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center rounded-3xl">
           <Loader2 className="w-10 h-10 text-brandGreen animate-spin mb-3" />
@@ -170,7 +160,7 @@ export default function RegistrationFlow() {
         </div>
       )}
 
-      {/* Шапка прогресса */}
+      {/* Прогресс */}
       <div className="bg-slate-50 p-4 border-b border-slate-100 flex justify-between px-8 sm:px-12">
         {steps.map((s) => (
           <div key={s.id} className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold border-2 ${currentStep >= s.id ? 'bg-brandGreen border-brandGreen text-white' : 'bg-white border-slate-200 text-slate-400'}`}>
@@ -181,13 +171,13 @@ export default function RegistrationFlow() {
 
       <div className="p-6 sm:p-8">
         
-        {/* ШАГ 1 */}
+        {/* ШАГ 1: ГОСНОМЕР ТЕПЕРЬ НЕОБЯЗАТЕЛЕН */}
         {currentStep === 1 && (
             <div className="space-y-6 animate-in slide-in-from-bottom-2">
                 <div className="space-y-3">
-                    <h3 className="font-bold text-lg text-slate-800">Начните с номера авто</h3>
+                    <h3 className="font-bold text-lg text-slate-800">Гос. номер (необязательно)</h3>
                     <div className="relative">
-                        <Input label="Гос. номер автомобиля" value={formData.licensePlate} onChange={() => {}} onInput={handlePlateInput} placeholder="А 123 АА / 77" isMono />
+                        <Input label="Проверьте наличие старой заявки" value={formData.licensePlate} onChange={() => {}} onInput={handlePlateInput} placeholder="А 123 АА / 77" isMono />
                         <button onClick={checkExistingApplication} className="absolute right-3 bottom-3 p-2 bg-brandGreen text-white rounded-xl shadow-md"><RotateCw size={20} className={isSearching ? 'animate-spin' : ''} /></button>
                     </div>
                 </div>
@@ -200,16 +190,20 @@ export default function RegistrationFlow() {
             </div>
         )}
 
-        {/* ШАГ 2: ПЕРСОНАЛЬНЫЕ ДАННЫЕ С ВАЛИДАЦИЕЙ */}
+        {/* ШАГ 2: ОБЯЗАТЕЛЬНЫЕ ДАННЫЕ */}
         {currentStep === 2 && (
           <div className="space-y-5 animate-in slide-in-from-bottom-2">
             <h3 className="font-bold text-lg text-slate-800">Персональные данные</h3>
-            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 mb-2">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Автомобиль</span>
-                <span className="font-mono text-xl font-bold text-brandGreen tracking-widest">{formData.licensePlate || "—"}</span>
+            
+            {/* Если на 1 шаге не ввели номер, даем ввести его здесь */}
+            <div className="space-y-1.5">
+                 <Input label="Гос. номер автомобиля (ОБЯЗАТЕЛЬНО)" value={formData.licensePlate} onChange={() => {}} onInput={handlePlateInput} placeholder="А 123 АА / 77" isMono />
             </div>
+
             {clientType === 'legal' && <Input label="Название компании" value={formData.companyName} onChange={v => setFormData({...formData, companyName: v})} placeholder="ООО Элит Газ" />}
+            
             <Input label={clientType === 'legal' ? "ФИО представителя" : "ФИО собственника полностью"} value={formData.fullName} onChange={v => setFormData({...formData, fullName: v})} placeholder="Иванов Иван Иванович" />
+            <p className="text-[10px] text-slate-400 italic">Все поля на этом этапе обязательны для заполнения</p>
           </div>
         )}
 
@@ -244,19 +238,24 @@ export default function RegistrationFlow() {
         <div className="mt-8 flex gap-3">
           {currentStep > 1 && <button onClick={() => setCurrentStep(prev => prev - 1)} className="px-6 py-4 rounded-2xl border border-slate-200 font-bold text-slate-500 hover:bg-slate-50 transition-all">Назад</button>}
           <button onClick={() => {
-            if (currentStep === 1 && !formData.licensePlate) return alert("Укажите номер");
+            // На 1 шаге ничего не блокируем
+            if (currentStep === 1) { 
+                setCurrentStep(2); 
+                return; 
+            }
             
-            // ВАЛИДАЦИЯ ПЕРЕД ПЕРЕХОДОМ С ШАГА 2
+            // На 2 шаге блокируем ВСЁ
             if (currentStep === 2) {
+                if (!formData.licensePlate.trim() || formData.licensePlate.length < 6) return alert("Введите корректный гос. номер");
                 if (clientType === 'legal' && !formData.companyName) return alert("Укажите название компании");
                 if (!validateFullName(formData.fullName)) {
-                    setShowNameError(true); // Показываем наше красивое окно
+                    setShowNameError(true);
                     return;
                 }
             }
 
             if (currentStep < 5) setCurrentStep(prev => prev + 1); else handleSubmit();
-          }} className="flex-1 py-4 bg-brandGreen text-white font-bold rounded-2xl shadow-lg shadow-green-900/10">
+          }} className="flex-1 py-4 bg-brandGreen text-white font-bold rounded-2xl shadow-lg">
             {isSubmitting ? <Loader2 className="animate-spin mx-auto" /> : (currentStep === 5 ? 'Отправить документы' : 'Далее')}
           </button>
         </div>
@@ -302,8 +301,8 @@ function UploadCard({ title, desc, files, existing, onUpload, onRemove }) {
       </div>
       <div className="flex flex-wrap gap-2">
         {existing && existing.map((name, i) => (
-            <div key={i} className="bg-green-50 border border-green-200 px-2.5 py-1.5 rounded-xl text-[10px] text-green-700 flex items-center gap-1 font-semibold animate-in zoom-in-95">
-                <Check size={10} strokeWidth={3} /> {name} (В облаке)
+            <div key={i} className="bg-green-50 border border-green-200 px-2.5 py-1.5 rounded-xl text-[10px] text-green-700 flex items-center gap-1 font-semibold">
+                <Check size={10} strokeWidth={3} /> {name}
             </div>
         ))}
         {files.map((f, i) => (
