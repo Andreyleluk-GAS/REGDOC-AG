@@ -6,6 +6,9 @@ let queue = Promise.resolve();
 
 const USERS_ROOT = '/RegDoc_Заявки/_USERS';
 const USERS_FILE = `${USERS_ROOT}/users.xlsx`;
+// НОВОЕ: Путь к файлу заявок
+const REQUESTS_FILE = `${USERS_ROOT}/requests.xlsx`;
+let requestsQueue = Promise.resolve();
 
 function getWebdavClient() {
   return createClient('https://webdav.cloud.mail.ru/', {
@@ -117,9 +120,6 @@ function saveStoreToWebdav(store) {
   return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 }
 
-/**
- * @param {(store: { version: number, users: object[] }) => Promise<unknown>} fn
- */
 export async function withUsersLock(fn) {
   const run = async () => {
     let lastErr = null;
@@ -136,7 +136,6 @@ export async function withUsersLock(fn) {
         return true;
       } catch (e) {
         lastErr = e;
-        // На следующей попытке снова прочитаем актуальный файл.
       }
     }
     throw lastErr || new Error('Не удалось обновить users.xlsx');
@@ -144,5 +143,39 @@ export async function withUsersLock(fn) {
 
   const p = queue.then(run, run);
   queue = p.catch(() => {});
+  return p;
+}
+
+// НОВОЕ: Функции для работы с requests.xlsx
+export async function loadRequests() {
+  const client = getWebdavClient();
+  if (!(await client.exists(REQUESTS_FILE))) return [];
+  try {
+    const buffer = await client.getFileContents(REQUESTS_FILE);
+    const workbook = XLSX.read(buffer, { type: 'buffer' });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    return XLSX.utils.sheet_to_json(sheet, { defval: '' });
+  } catch (e) {
+    return [];
+  }
+}
+
+async function saveRequestsToWebdav(rows) {
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'requests');
+  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+}
+
+export async function withRequestsLock(fn) {
+  const run = async () => {
+    const requests = await loadRequests();
+    await fn(requests);
+    const client = getWebdavClient();
+    const buf = await saveRequestsToWebdav(requests);
+    await client.putFileContents(REQUESTS_FILE, buf);
+  };
+  const p = requestsQueue.then(run, run);
+  requestsQueue = p.catch(() => {});
   return p;
 }
