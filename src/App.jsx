@@ -25,7 +25,9 @@ function App() {
   const [requests, setRequests] = useState([]);
   const [loadingReqs, setLoadingReqs] = useState(false);
   const [editingRequest, setEditingRequest] = useState(null);
-  const [workAlert, setWorkAlert] = useState(false);
+  
+  // Изменено: Состояние алерта теперь принимает 'work' (в работе) | 'dev' (в разработке) | null
+  const [activeAlert, setActiveAlert] = useState(null);
 
   const cta = useMemo(
     () => ({
@@ -51,7 +53,6 @@ function App() {
     </button>
   );
 
-  // ЛОГИКА ВХОДА: Переход в кабинет или на Step 1
   useEffect(() => {
     if (user) {
       setLoadingReqs(true);
@@ -60,7 +61,6 @@ function App() {
         .then(data => { 
           if (Array.isArray(data)) {
             setRequests(data);
-            // Если пользователь только зашел, перенаправляем его
             if (screen === 'landing' || screen === 'cabinet') {
                if (data.length > 0) setScreen('cabinet');
                else setScreen('register');
@@ -156,36 +156,71 @@ function App() {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {requests.map((req, idx) => (
-                    <div key={idx} className="p-4 rounded-2xl border border-regdoc-grey bg-regdoc-grey/20">
-                      <div className="flex justify-between items-center gap-4">
-                        <div className="shrink-0">
-                          <div className="text-xl font-black text-regdoc-navy tracking-tight">{formatPlate(req.car_number)}</div>
-                          <div className="text-[10px] font-bold text-regdoc-navy/40 uppercase">{req.full_name?.replace(/_/g, ' ')}</div>
-                        </div>
-                        <div className="flex flex-col gap-2 items-end">
-                          <div className="flex gap-2">
-                            <StatusBadge label="Документы для ПЗ" isGreen={req.type_PZ === 'yes'} onClick={() => cta.onEditRequest(req, 'pz', 4)} tooltip={req.type_PZ !== 'yes' ? "Не хватает документов" : undefined} />
-                            <StatusBadge label="ПЗ: готово" isGreen={false} onClick={() => setWorkAlert(true)} />
+                  {requests.map((req, idx) => {
+                    // Переменные для дальнейшего функционала готовности документов
+                    const isPZ_Ready = false; 
+                    const isPB_Ready = false;
+
+                    return (
+                      <div key={idx} className="p-4 rounded-2xl border border-regdoc-grey bg-regdoc-grey/20">
+                        <div className="flex justify-between items-center gap-4">
+                          <div className="shrink-0">
+                            <div className="text-xl font-black text-regdoc-navy tracking-tight">{formatPlate(req.car_number)}</div>
+                            <div className="text-[10px] font-bold text-regdoc-navy/40 uppercase">{req.full_name?.replace(/_/g, ' ')}</div>
                           </div>
-                          <div className="flex gap-2">
-                            <StatusBadge label="Документы для ПБ" isGreen={req.type_PB === 'yes'} onClick={() => cta.onEditRequest(req, 'pb', 4)} tooltip={req.type_PB !== 'yes' ? "Не хватает документов" : undefined} />
-                            <StatusBadge label="ПБ: готово" isGreen={false} onClick={() => setWorkAlert(true)} />
+                          <div className="flex flex-col gap-2 items-end">
+                            <div className="flex gap-2">
+                              {/* Изменено: Маршрутизация на 3 или 4 этап в зависимости от цвета (наличия папки) */}
+                              <StatusBadge 
+                                label="Документы для ПЗ" 
+                                isGreen={req.type_PZ === 'yes'} 
+                                onClick={() => cta.onEditRequest(req, 'pz', req.type_PZ === 'yes' ? 4 : 3)} 
+                                tooltip={req.type_PZ !== 'yes' ? "Не хватает документов" : undefined} 
+                              />
+                              {/* Изменено: Вызов алерта в зависимости от статуса */}
+                              <StatusBadge 
+                                label="ПЗ: готово" 
+                                isGreen={isPZ_Ready} 
+                                onClick={() => setActiveAlert(isPZ_Ready ? 'dev' : 'work')} 
+                              />
+                            </div>
+                            <div className="flex gap-2">
+                              {/* Изменено: Маршрутизация на 3 или 4 этап в зависимости от цвета (наличия папки) */}
+                              <StatusBadge 
+                                label="Документы для ПБ" 
+                                isGreen={req.type_PB === 'yes'} 
+                                onClick={() => cta.onEditRequest(req, 'pb', req.type_PB === 'yes' ? 4 : 3)} 
+                                tooltip={req.type_PB !== 'yes' ? "Не хватает документов" : undefined} 
+                              />
+                              {/* Изменено: Вызов алерта в зависимости от статуса */}
+                              <StatusBadge 
+                                label="ПБ: готово" 
+                                isGreen={isPB_Ready} 
+                                onClick={() => setActiveAlert(isPB_Ready ? 'dev' : 'work')} 
+                              />
+                            </div>
                           </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
 
-              {workAlert && (
+              {/* Изменено: Динамический алерт для разных состояний */}
+              {activeAlert && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
                   <div className="bg-white rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl border border-regdoc-grey">
-                    <AlertTriangle className="w-16 h-16 text-amber-500 mx-auto mb-6" />
-                    <h3 className="text-xl font-bold text-regdoc-navy mb-3">Документы в работе</h3>
-                    <p className="text-sm text-regdoc-navy/70 mb-8">Ваша заявка находится в стадии обработки. Как только документы будут готовы, они появятся здесь.</p>
-                    <button onClick={() => setWorkAlert(false)} className="w-full py-3 bg-regdoc-navy text-white font-bold rounded-xl hover:bg-regdoc-teal transition-all">Назад</button>
+                    <AlertTriangle className={`w-16 h-16 mx-auto mb-6 ${activeAlert === 'work' ? 'text-amber-500' : 'text-regdoc-cyan'}`} />
+                    <h3 className="text-xl font-bold text-regdoc-navy mb-3">
+                      {activeAlert === 'work' ? 'Документы в работе' : 'Раздел в разработке'}
+                    </h3>
+                    <p className="text-sm text-regdoc-navy/70 mb-8">
+                      {activeAlert === 'work' 
+                        ? 'Ваша заявка находится в стадии обработки. Как только документы будут готовы, они появятся здесь.'
+                        : 'Данный функционал скоро появится. Вы сможете просматривать и скачивать готовые файлы.'}
+                    </p>
+                    <button onClick={() => setActiveAlert(null)} className="w-full py-3 bg-regdoc-navy text-white font-bold rounded-xl hover:bg-regdoc-teal transition-all">Назад</button>
                   </div>
                 </div>
               )}
