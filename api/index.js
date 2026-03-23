@@ -4,9 +4,9 @@ import multer from 'multer';
 import cors from 'cors';
 import { createClient } from 'webdav';
 import { Document, Packer, Paragraph, TextRun } from 'docx';
-import jwt from 'jsonwebtoken'; // НОВОЕ
+import jwt from 'jsonwebtoken';
 import authRouter from './authRouter.js';
-import { loadRequests, withRequestsLock } from './userStore.js'; // НОВОЕ
+import { loadRequests, withRequestsLock } from './userStore.js';
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() }); 
@@ -16,7 +16,7 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, service: 'regdoc-api' });
 });
 
-// НОВОЕ: Получение списка заявок текущего пользователя
+// Получение списка заявок текущего пользователя
 app.get('/api/my-requests', async (req, res) => {
     try {
         const authHeader = req.headers.authorization;
@@ -24,7 +24,7 @@ app.get('/api/my-requests', async (req, res) => {
         const token = authHeader.split(' ')[1];
         const decoded = jwt.verify(token, process.env.JWT_SECRET || 'dev-only-change-JWT_SECRET-in-env');
         const allRequests = await loadRequests();
-        res.json(allRequests.filter(r => r.email === decoded.email));
+        res.json(allRequests.filter(r => String(r.email).toLowerCase() === decoded.email.toLowerCase()));
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
@@ -39,6 +39,43 @@ const normalizePlate = (plate) => {
     const map = {'A':'А','B':'В','E':'Е','K':'К','M':'М','H':'Н','O':'О','P':'Р','C':'С','T':'Т','Y':'У','X':'Х'};
     return plate.toUpperCase().replace(/[ABEKMHOPCTYX]/g, char => map[char] || char).replace(/[^А-ЯЁ0-9]/g, '');
 };
+
+// НОВАЯ ФУНКЦИЯ: Синхронизация записи в реестре на основе папок сервера
+async function syncRequestRecord(folderName, email) {
+    // Извлекаем данные из [YYYY.MM.DD][Name][Plate]
+    const match = folderName.match(/\[(\d{4})\.(\d{2})\.(\d{2})\]\[(.*?)\]\[(.*?)\]/);
+    if (!match) return;
+
+    const dateStr = `${match[3]}.${match[2]}.${match[1]}`;
+    const fullName = match[4].replace(/_/g, ' ');
+    const plate = match[5];
+
+    await withRequestsLock(async (requests) => {
+        const userEmail = email.toLowerCase();
+        const plateKey = normalizePlate(plate);
+        
+        let idx = requests.findIndex(r => 
+            normalizePlate(String(r.car_number || '')) === plateKey && 
+            String(r.email || '').toLowerCase() === userEmail
+        );
+
+        // Проверяем физическое наличие папок услуг
+        const pzExists = await client.exists(`/RegDoc_Заявки/${folderName}/Для ПЗ`);
+        const pbExists = await client.exists(`/RegDoc_Заявки/${folderName}/Для ПБ`);
+
+        const record = {
+            DATE: dateStr,
+            full_name: fullName,
+            car_number: plate,
+            email: userEmail,
+            type_PZ: pzExists ? 'yes' : 'no',
+            type_PB: pbExists ? 'yes' : 'no'
+        };
+
+        if (idx > -1) requests[idx] = record;
+        else requests.push(record);
+    });
+}
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -107,6 +144,15 @@ app.post('/api/upload', upload.any(), async (req, res) => {
     try {
         const { step, folderName, clientType, docType, fullName, companyName, licensePlate, conversionType, updateDescription } = req.body;
         
+        // Получаем email из токена для синхронизации
+        let userEmail = "";
+        const authHeader = req.headers.authorization;
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+            const decoded = jwt.verify(authHeader.split(' ')[1], process.env.JWT_SECRET || 'dev-only-change-JWT_SECRET-in-env');
+            userEmail = decoded.email;
+        }
+
+        // ШАГ 1: Создание корневой папки клиента + Первая запись в реестр
         if (step === 'main_folder') {
             const now = new Date();
             const ekb = new Intl.DateTimeFormat('ru-RU', {timeZone: 'Asia/Yekaterinburg', year:'numeric', month:'2-digit', day:'2-digit'}).formatToParts(now);
@@ -120,6 +166,7 @@ app.post('/api/upload', upload.any(), async (req, res) => {
             await createDirWithRetry(`/RegDoc_Заявки`);
             await createDirWithRetry(`/RegDoc_Заявки/${newFolderName}`);
             
+            if (userEmail) await syncRequestRecord(newFolderName, userEmail);
             return res.json({ success: true, folderName: newFolderName });
         }
 
@@ -133,11 +180,14 @@ app.post('/api/upload', upload.any(), async (req, res) => {
             return res.json({ success: true });
         }
 
+        // ШАГ 2: Создание подпапки услуги + Обновление реестра (type_PZ/PB на 'yes')
         if (step === 'sub_folder') {
             await createDirWithRetry(finalPath);
+            if (userEmail) await syncRequestRecord(folderName, userEmail);
             return res.json({ success: true });
         }
 
+        // ШАГ 3: Загрузка файла + Постоянная проверка реестра
         if (step === 'single_file') {
             const file = req.files[0];
             const russianNames = { 'passport': 'ПАСПОРТ', 'snils': 'СНИЛС', 'sts': 'СТС', 'pts': 'ПТС' };
@@ -163,46 +213,19 @@ app.post('/api/upload', upload.any(), async (req, res) => {
             const ext = file.originalname.split('.').pop().toLowerCase();
             const newFileName = `${cat}_${maxNum + 1}.${ext}`;
             await uploadFileWithRetry(`${finalPath}/${newFileName}`, file.buffer);
+            
+            if (userEmail) await syncRequestRecord(folderName, userEmail);
             return res.json({ success: true });
         }
 
+        // ШАГ 4: Загрузка описания + Финальная проверка реестра
         if (step === 'doc_file') {
             if (updateDescription !== 'false') {
                 const doc = new Document({sections: [{children: [new Paragraph({children: [new TextRun({text: "Тип переоборудования:", bold: true, size: 28})]}) , new Paragraph({children: [new TextRun({text: conversionType || "", size: 24})]})]}]});
                 const docBuf = await Packer.toBuffer(doc);
                 await uploadFileWithRetry(`${finalPath}/описание.docx`, docBuf);
             }
-
-            // НОВОЕ: Идентификация заявки в requests.xlsx
-            try {
-                const authHeader = req.headers.authorization;
-                if (authHeader && authHeader.startsWith('Bearer ')) {
-                    const token = authHeader.split(' ')[1];
-                    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'dev-only-change-JWT_SECRET-in-env');
-                    await withRequestsLock(async (requests) => {
-                        const plate = normalizePlate(licensePlate);
-                        const email = decoded.email.toLowerCase();
-                        let existing = requests.findIndex(r => normalizePlate(String(r.car_number || '')) === plate && String(r.email || '').toLowerCase() === email);
-                        
-                        if (existing > -1) {
-                            if (docType === 'pz') requests[existing].type_PZ = 'yes';
-                            if (docType === 'pb') requests[existing].type_PB = 'yes';
-                        } else {
-                            const now = new Date();
-                            const dateStr = new Intl.DateTimeFormat('ru-RU').format(now);
-                            requests.push({
-                                DATE: dateStr,
-                                full_name: fullName.trim().replace(/\s+/g, '_'),
-                                car_number: licensePlate,
-                                email: email,
-                                type_PZ: docType === 'pz' ? 'yes' : 'no',
-                                type_PB: docType === 'pb' ? 'yes' : 'no'
-                            });
-                        }
-                    });
-                }
-            } catch (e) { console.error('Logging request error:', e.message); }
-
+            if (userEmail) await syncRequestRecord(folderName, userEmail);
             return res.json({ success: true });
         }
 

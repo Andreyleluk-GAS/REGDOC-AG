@@ -51,7 +51,7 @@ function App() {
     </button>
   );
 
-  // Изменено: Обновленная логика загрузки заявок и перенаправления
+  // ЛОГИКА ВХОДА: Переход в кабинет или на Step 1
   useEffect(() => {
     if (user) {
       setLoadingReqs(true);
@@ -60,16 +60,17 @@ function App() {
         .then(data => { 
           if (Array.isArray(data)) {
             setRequests(data);
-            // Если пользователь залогинился (screen 'cabinet') и заявок нет — сразу на регистрацию
-            if (data.length === 0 && screen === 'cabinet') {
-              setScreen('register');
+            // Если пользователь только зашел, перенаправляем его
+            if (screen === 'landing' || screen === 'cabinet') {
+               if (data.length > 0) setScreen('cabinet');
+               else setScreen('register');
             }
           }
         })
         .catch(err => console.error(err))
         .finally(() => setLoadingReqs(false));
     }
-  }, [user, screen]);
+  }, [user]);
 
   const needAuth = screen === 'register' || screen === 'cabinet';
   const showLogin = needAuth && !user && !booting;
@@ -107,22 +108,14 @@ function App() {
                   Выйти
                 </button>
               )}
-              {/* Изменено: Кнопка "К списку заявок" с логикой активности и алертом */}
               {screen === 'register' && (
                 <button
                   type="button"
                   onClick={() => {
-                    if (requests.length > 0) {
-                      cta.onCabinet();
-                    } else {
-                      alert("У вас еще нет заявок");
-                    }
+                    if (requests.length > 0) cta.onCabinet();
+                    else alert("У вас еще нет заявок");
                   }}
-                  className={`px-4 py-2 rounded-2xl border border-regdoc-grey/60 font-bold text-sm transition-all ${
-                    requests.length > 0 
-                      ? "bg-white/70 text-regdoc-navy hover:bg-white" 
-                      : "bg-gray-100 text-gray-400 opacity-50 cursor-not-allowed"
-                  }`}
+                  className={`px-4 py-2 rounded-2xl border border-regdoc-grey/60 font-bold text-sm transition-all ${requests.length > 0 ? "bg-white/70 text-regdoc-navy hover:bg-white" : "bg-gray-100 text-gray-400 opacity-50 cursor-not-allowed"}`}
                 >
                   К списку заявок
                 </button>
@@ -133,101 +126,56 @@ function App() {
         )}
 
         {banner && (
-          <div
-            className={`rounded-2xl px-4 py-3 text-sm font-semibold border ${
-              banner.type === 'ok'
-                ? 'bg-regdoc-mist border-regdoc-cyan/30 text-regdoc-teal'
-                : 'bg-red-50 border-red-100 text-red-700'
-            }`}
-          >
+          <div className={`rounded-2xl px-4 py-3 text-sm font-semibold border ${banner.type === 'ok' ? 'bg-regdoc-mist border-regdoc-cyan/30 text-regdoc-teal' : 'bg-red-50 border-red-100 text-red-700'}`}>
             <div className="flex justify-between gap-3 items-start">
               <span>{banner.text}</span>
-              <button type="button" onClick={clearBanner} className="text-regdoc-navy/45 hover:text-regdoc-navy shrink-0">
-                ✕
-              </button>
+              <button type="button" onClick={clearBanner} className="text-regdoc-navy/45 hover:text-regdoc-navy shrink-0">✕</button>
             </div>
           </div>
         )}
 
         {screen === 'landing' ? (
-          <main>
-            <LandingPage onRegister={cta.onRegister} onCabinet={cta.onCabinet} />
-          </main>
+          <main><LandingPage onRegister={cta.onRegister} onCabinet={cta.onCabinet} /></main>
         ) : showLogin ? (
-          <main className="space-y-4">
-            <EmailAuthForm initialMode={screen === 'register' ? 'register' : 'login'} />
-          </main>
+          <main className="space-y-4"><EmailAuthForm initialMode={screen === 'register' ? 'register' : 'login'} /></main>
         ) : screen === 'cabinet' ? (
           <main className="space-y-4">
             <div className="bg-white rounded-3xl shadow-xl border border-regdoc-grey p-6 sm:p-8">
               <div className="flex items-center justify-between mb-6">
                 <h2 className="text-xl font-bold text-regdoc-navy">Мои заявки</h2>
-                <button 
-                  onClick={cta.onRegister}
-                  className="px-4 py-2 bg-regdoc-cyan text-white text-xs font-bold rounded-xl hover:bg-regdoc-teal transition-all shadow-md"
-                >
-                  + Новая заявка
-                </button>
+                <button onClick={cta.onRegister} className="px-4 py-2 bg-regdoc-cyan text-white text-xs font-bold rounded-xl hover:bg-regdoc-teal transition-all shadow-md">+ Новая заявка</button>
               </div>
 
               {loadingReqs ? (
                 <div className="flex flex-col items-center py-12 gap-3">
-                  <Loader2 className="w-8 h-8 text-regdoc-cyan animate-spin" />
-                  <p className="text-xs font-bold text-regdoc-navy/40 uppercase tracking-widest">Загрузка списка...</p>
+                  <Loader2 className="w-8 h-8 text-regdoc-cyan animate-spin" /><p className="text-xs font-bold text-regdoc-navy/40 uppercase tracking-widest">Загрузка списка...</p>
                 </div>
               ) : requests.length === 0 ? (
                 <div className="text-center py-12 border-2 border-dashed border-regdoc-grey rounded-2xl">
-                  <FileText className="w-12 h-12 text-regdoc-grey mx-auto mb-3" />
-                  <p className="text-regdoc-navy/50 text-sm font-medium">У вас пока нет активных заявок</p>
+                  <FileText className="w-12 h-12 text-regdoc-grey mx-auto mb-3" /><p className="text-regdoc-navy/50 text-sm font-medium">У вас пока нет активных заявок</p>
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {requests.map((req, idx) => {
-                    const isPZ_Submitted = req.type_PZ === 'yes';
-                    const isPB_Submitted = req.type_PB === 'yes';
-                    const isPZ_Ready = false; 
-                    const isPB_Ready = false; 
-
-                    return (
-                      <div key={idx} className="p-4 rounded-2xl border border-regdoc-grey bg-regdoc-grey/20">
-                        <div className="flex justify-between items-center gap-4">
-                          <div className="shrink-0">
-                            <div className="text-xl font-black text-regdoc-navy tracking-tight">{formatPlate(req.car_number)}</div>
-                            <div className="text-[10px] font-bold text-regdoc-navy/40 uppercase">{req.full_name?.replace(/_/g, ' ')}</div>
+                  {requests.map((req, idx) => (
+                    <div key={idx} className="p-4 rounded-2xl border border-regdoc-grey bg-regdoc-grey/20">
+                      <div className="flex justify-between items-center gap-4">
+                        <div className="shrink-0">
+                          <div className="text-xl font-black text-regdoc-navy tracking-tight">{formatPlate(req.car_number)}</div>
+                          <div className="text-[10px] font-bold text-regdoc-navy/40 uppercase">{req.full_name?.replace(/_/g, ' ')}</div>
+                        </div>
+                        <div className="flex flex-col gap-2 items-end">
+                          <div className="flex gap-2">
+                            <StatusBadge label="Документы для ПЗ" isGreen={req.type_PZ === 'yes'} onClick={() => cta.onEditRequest(req, 'pz', 4)} tooltip={req.type_PZ !== 'yes' ? "Не хватает документов" : undefined} />
+                            <StatusBadge label="ПЗ: готово" isGreen={false} onClick={() => setWorkAlert(true)} />
                           </div>
-
-                          <div className="flex flex-col gap-2 items-end">
-                            <div className="flex gap-2">
-                              <StatusBadge
-                                label="Документы для ПЗ"
-                                isGreen={isPZ_Submitted}
-                                onClick={() => cta.onEditRequest(req, 'pz', 4)}
-                                tooltip={!isPZ_Submitted ? "Не хватает документов" : undefined}
-                              />
-                              <StatusBadge
-                                label="ПЗ: готово"
-                                isGreen={isPZ_Ready}
-                                onClick={() => !isPZ_Ready ? setWorkAlert(true) : null}
-                              />
-                            </div>
-                            <div className="flex gap-2">
-                              <StatusBadge
-                                label="Документы для ПБ"
-                                isGreen={isPB_Submitted}
-                                onClick={() => cta.onEditRequest(req, 'pb', 4)}
-                                tooltip={!isPB_Submitted ? "Не хватает документов" : undefined}
-                              />
-                              <StatusBadge
-                                label="ПБ: готово"
-                                isGreen={isPB_Ready}
-                                onClick={() => !isPB_Ready ? setWorkAlert(true) : null}
-                              />
-                            </div>
+                          <div className="flex gap-2">
+                            <StatusBadge label="Документы для ПБ" isGreen={req.type_PB === 'yes'} onClick={() => cta.onEditRequest(req, 'pb', 4)} tooltip={req.type_PB !== 'yes' ? "Не хватает документов" : undefined} />
+                            <StatusBadge label="ПБ: готово" isGreen={false} onClick={() => setWorkAlert(true)} />
                           </div>
                         </div>
                       </div>
-                    );
-                  })}
+                    </div>
+                  ))}
                 </div>
               )}
 
@@ -237,12 +185,7 @@ function App() {
                     <AlertTriangle className="w-16 h-16 text-amber-500 mx-auto mb-6" />
                     <h3 className="text-xl font-bold text-regdoc-navy mb-3">Документы в работе</h3>
                     <p className="text-sm text-regdoc-navy/70 mb-8">Ваша заявка находится в стадии обработки. Как только документы будут готовы, они появятся здесь.</p>
-                    <button
-                      onClick={() => setWorkAlert(false)}
-                      className="w-full py-3 bg-regdoc-navy text-white font-bold rounded-xl hover:bg-regdoc-teal transition-all"
-                    >
-                      Назад
-                    </button>
+                    <button onClick={() => setWorkAlert(false)} className="w-full py-3 bg-regdoc-navy text-white font-bold rounded-xl hover:bg-regdoc-teal transition-all">Назад</button>
                   </div>
                 </div>
               )}
@@ -252,19 +195,14 @@ function App() {
           <main>
             <div className="flex justify-end">
               <div className="hidden md:block bg-regdoc-navy rounded-[20px] px-3 py-2 text-white/80 text-[11px] font-bold tracking-wider mb-3">
-                <div className="flex items-center gap-2">
-                  <ShieldCheck className="w-4 h-4 text-amber-400" />
-                  Официально
-                </div>
+                <div className="flex items-center gap-2"><ShieldCheck className="w-4 h-4 text-amber-400" />Официально</div>
               </div>
             </div>
             <RegistrationFlow editingRequest={editingRequest} />
           </main>
         )}
-
         <footer className="text-center text-[11px] text-regdoc-navy/45 pb-4 flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
-          <RegdocIcon name="gears" className="w-4 h-4 text-regdoc-teal shrink-0" />
-          <span>Технологичность · Прозрачность · Удобство</span>
+          <RegdocIcon name="gears" className="w-4 h-4 text-regdoc-teal shrink-0" /><span>Технологичность · Прозрачность · Удобство</span>
         </footer>
       </div>
     </div>

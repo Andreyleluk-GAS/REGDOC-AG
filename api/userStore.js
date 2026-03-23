@@ -146,7 +146,7 @@ export async function withUsersLock(fn) {
   return p;
 }
 
-// НОВОЕ: Функции для работы с requests.xlsx
+// НОВОЕ: Функции для работы с реестром заявок requests.xlsx
 export async function loadRequests() {
   const client = getWebdavClient();
   if (!(await client.exists(REQUESTS_FILE))) return [];
