@@ -16,7 +16,6 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, service: 'regdoc-api' });
 });
 
-// ИЗМЕНЕНО: Обязательная предварительная проверка наличия папок и новых записей requests.xlsx
 app.get('/api/my-requests', async (req, res) => {
     try {
         const authHeader = req.headers.authorization;
@@ -25,7 +24,6 @@ app.get('/api/my-requests', async (req, res) => {
         const decoded = jwt.verify(token, process.env.JWT_SECRET || 'dev-only-change-JWT_SECRET-in-env');
         const userEmail = decoded.email.toLowerCase();
 
-        // Читаем актуальный Excel (включая свежие заявки)
         const allRequests = await loadRequests();
         const userReqs = allRequests.filter(r => String(r.email).toLowerCase() === userEmail);
         
@@ -37,7 +35,6 @@ app.get('/api/my-requests', async (req, res) => {
                 const fPlate = normalizePlate(String(r.car_number || ''));
                 const folderName = `[${dateParts[2]}.${dateParts[1]}.${dateParts[0]}][${fName}][${fPlate}]`;
                 
-                // Проверяем физическое наличие папок
                 const pzExists = await client.exists(`/RegDoc_Заявки/${folderName}/Для ПЗ`);
                 const pbExists = await client.exists(`/RegDoc_Заявки/${folderName}/Для ПБ`);
                 
@@ -52,7 +49,6 @@ app.get('/api/my-requests', async (req, res) => {
             }
         }
 
-        // Если были изменения по факту папок — обновляем requests.xlsx
         if (updates.length > 0) {
             await withRequestsLock(async (requestsToUpdate) => {
                 for (let u of updates) {
@@ -141,7 +137,32 @@ app.get('/api/check-plate', async (req, res) => {
         if (folder) {
             const match = folder.basename.match(/\[.*?\]\[(.*?)\]\[.*?\]/);
             const extractedName = match ? match[1].replace(/_/g, ' ') : "Клиент";
-            const existingFiles = { passport: [], snils: [], sts: [], pts: [] };
+            
+            // ИЗМЕНЕНО: Расширенная карта всех типов файлов для проверки наличия в облаке
+            const existingFiles = {
+                passport: [], snils: [], sts: [], pts: [], egrn: [],
+                balloon_passport: [], act_opresovki: [], cert_gbo: [], cert_balloon: [],
+                pte: [], zd: [], form207: [], gibdd_zayavlenie: [],
+                photo_left: [], photo_right: [], photo_rear: [], photo_front: [],
+                photo_hood: [], photo_vin: [], photo_kuzov: [], photo_tablichka: [],
+                photo_balloon_place: [], photo_balloon_tablichka: [], photo_vent: [],
+                photo_mult: [], photo_reduktor: [], photo_ebu: [], photo_forsunki: [], photo_vzu: []
+            };
+
+            const ruToEnMap = {
+                'ПАСПОРТ': 'passport', 'СНИЛС': 'snils', 'СТС': 'sts', 'ПТС': 'pts',
+                'ВЫПИСКА_ЕГРН': 'egrn', 'ПАСПОРТ_БАЛЛОНА': 'balloon_passport',
+                'АКТ_ОПРЕССОВКИ': 'act_opresovki', 'СЕРТИФИКАТ_ГБО': 'cert_gbo',
+                'СЕРТИФИКАТ_БАЛЛОНА': 'cert_balloon', 'ПРЕДВАРИТЕЛЬНОЕ_ЗАКЛЮЧЕНИЕ': 'pte',
+                'ЗАЯВЛЕНИЕ_ДЕКЛАРАЦИЯ': 'zd', 'ФОРМА_207': 'form207', 'ЗАЯВЛЕНИЕ_ГИБДД': 'gibdd_zayavlenie',
+                'ФОТО_СЛЕВА': 'photo_left', 'ФОТО_СПРАВА': 'photo_right', 'ФОТО_СЗАДИ': 'photo_rear',
+                'ФОТО_СПЕРЕДИ': 'photo_front', 'ФОТО_КАПОТ': 'photo_hood', 'ФОТО_VIN': 'photo_vin',
+                'ФОТО_НОМЕР_КУЗОВА': 'photo_kuzov', 'ФОТО_ТАБЛИЧКА': 'photo_tablichka',
+                'ФОТО_МЕСТО_БАЛЛОНА': 'photo_balloon_place', 'ФОТО_ТАБЛИЧКА_БАЛЛОНА': 'photo_balloon_tablichka',
+                'ФОТО_ВЕНТ_КАНАЛОВ': 'photo_vent', 'ФОТО_МУЛЬТ': 'photo_mult', 'ФОТО_РЕДУКТОР': 'photo_reduktor',
+                'ФОТО_ЭБУ': 'photo_ebu', 'ФОТО_ФОРСУНКИ': 'photo_forsunki', 'ФОТО_ВЗУ': 'photo_vzu'
+            };
+
             let hasDescription = false; 
             const subFolders = ['Для ПЗ', 'Для ПБ'];
             for (const sub of subFolders) {
@@ -154,10 +175,12 @@ app.get('/api/check-plate', async (req, res) => {
                                 hasDescription = true;
                             } else if (!file.basename.includes('.docx')) {
                                 const name = file.basename.toUpperCase();
-                                if (name.includes('ПАСПОРТ')) existingFiles.passport.push(file.basename);
-                                if (name.includes('СНИЛС')) existingFiles.snils.push(file.basename);
-                                if (name.includes('СТС')) existingFiles.sts.push(file.basename);
-                                if (name.includes('ПТС')) existingFiles.pts.push(file.basename);
+                                for (const [ru, en] of Object.entries(ruToEnMap)) {
+                                    if (name.startsWith(ru + '_')) {
+                                        existingFiles[en].push(file.basename);
+                                        break;
+                                    }
+                                }
                             }
                         }
                     });
@@ -184,7 +207,7 @@ async function uploadFileWithRetry(path, buffer) {
 
 app.post('/api/upload', upload.any(), async (req, res) => {
     try {
-        const { step, folderName, clientType, docType, fullName, companyName, licensePlate, conversionType, updateDescription } = req.body;
+        const { step, folderName, clientType, docType, fullName, companyName, licensePlate, conversionType, updateDescription, copyDocsFromPZ } = req.body;
         
         let userEmail = "";
         const authHeader = req.headers.authorization;
@@ -231,9 +254,22 @@ app.post('/api/upload', upload.any(), async (req, res) => {
             return res.json({ success: true });
         }
 
+        // ИЗМЕНЕНО: Расширенная карта имен для загрузки файлов
         if (step === 'single_file') {
             const file = req.files[0];
-            const russianNames = { 'passport': 'ПАСПОРТ', 'snils': 'СНИЛС', 'sts': 'СТС', 'pts': 'ПТС' };
+            const russianNames = {
+                'passport': 'ПАСПОРТ', 'snils': 'СНИЛС', 'sts': 'СТС', 'pts': 'ПТС',
+                'egrn': 'ВЫПИСКА_ЕГРН', 'balloon_passport': 'ПАСПОРТ_БАЛЛОНА',
+                'act_opresovki': 'АКТ_ОПРЕССОВКИ', 'cert_gbo': 'СЕРТИФИКАТ_ГБО',
+                'cert_balloon': 'СЕРТИФИКАТ_БАЛЛОНА', 'pte': 'ПРЕДВАРИТЕЛЬНОЕ_ЗАКЛЮЧЕНИЕ',
+                'zd': 'ЗАЯВЛЕНИЕ_ДЕКЛАРАЦИЯ', 'form207': 'ФОРМА_207', 'gibdd_zayavlenie': 'ЗАЯВЛЕНИЕ_ГИБДД',
+                'photo_left': 'ФОТО_СЛЕВА', 'photo_right': 'ФОТО_СПРАВА', 'photo_rear': 'ФОТО_СЗАДИ',
+                'photo_front': 'ФОТО_СПЕРЕДИ', 'photo_hood': 'ФОТО_КАПОТ', 'photo_vin': 'ФОТО_VIN',
+                'photo_kuzov': 'ФОТО_НОМЕР_КУЗОВА', 'photo_tablichka': 'ФОТО_ТАБЛИЧКА',
+                'photo_balloon_place': 'ФОТО_МЕСТО_БАЛЛОНА', 'photo_balloon_tablichka': 'ФОТО_ТАБЛИЧКА_БАЛЛОНА',
+                'photo_vent': 'ФОТО_ВЕНТ_КАНАЛОВ', 'photo_mult': 'ФОТО_МУЛЬТ', 'photo_reduktor': 'ФОТО_РЕДУКТОР',
+                'photo_ebu': 'ФОТО_ЭБУ', 'photo_forsunki': 'ФОТО_ФОРСУНКИ', 'photo_vzu': 'ФОТО_ВЗУ'
+            };
             const cat = russianNames[file.fieldname] || 'ФАЙЛ';
 
             let existingFileNames = [];
@@ -261,12 +297,32 @@ app.post('/api/upload', upload.any(), async (req, res) => {
             return res.json({ success: true });
         }
 
+        // ИЗМЕНЕНО: Логика копирования базовых файлов из ПЗ в ПБ
         if (step === 'doc_file') {
-            if (updateDescription !== 'false') {
+            if (updateDescription !== 'false' && docType === 'pz') {
                 const doc = new Document({sections: [{children: [new Paragraph({children: [new TextRun({text: "Тип переоборудования:", bold: true, size: 28})]}) , new Paragraph({children: [new TextRun({text: conversionType || "", size: 24})]})]}]});
                 const docBuf = await Packer.toBuffer(doc);
                 await uploadFileWithRetry(`${finalPath}/описание.docx`, docBuf);
             }
+
+            if (copyDocsFromPZ === 'true' && docType === 'pb') {
+                const pzPath = `/RegDoc_Заявки/${folderName}/Для ПЗ`;
+                if (await client.exists(pzPath)) {
+                    const pzItems = await client.getDirectoryContents(pzPath);
+                    for (const item of pzItems) {
+                        if (item.type === 'file') {
+                            const name = item.basename.toUpperCase();
+                            if (name.startsWith('ПАСПОРТ_') || name.startsWith('СНИЛС_') || name.startsWith('СТС_') || name.startsWith('ПТС_') || name.startsWith('ВЫПИСКА_ЕГРН_')) {
+                                const targetFile = `${finalPath}/${item.basename}`;
+                                if (await client.exists(targetFile) === false) {
+                                    await client.copyFile(item.filename, targetFile);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             if (userEmail) await syncRequestRecord(folderName, userEmail);
             return res.json({ success: true });
         }

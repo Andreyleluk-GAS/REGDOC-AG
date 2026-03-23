@@ -3,14 +3,6 @@ import { Check, ChevronRight, User, Briefcase, FileSignature, FileCheck2, Camera
 import imageCompression from 'browser-image-compression';
 import { authFetch, getToken } from '../lib/api.js';
 
-const steps = [
-  { id: 1, title: 'Заявитель' }, 
-  { id: 2, title: 'Данные' }, 
-  { id: 3, title: 'Услуга' }, 
-  { id: 4, title: 'Документы' }, 
-  { id: 5, title: 'Описание' },
-];
-
 export default function RegistrationFlow({ editingRequest }) {
   const [currentStep, setCurrentStep] = useState(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -31,13 +23,33 @@ export default function RegistrationFlow({ editingRequest }) {
 
   const [clientType, setClientType] = useState('individual');
   const [docType, setDocType] = useState('pz');
+  const [copyDocsFromPZ, setCopyDocsFromPZ] = useState(false); // ИЗМЕНЕНО: Состояние тумблера
   const [formData, setFormData] = useState({ fullName: '', companyName: '', licensePlate: '', conversionType: 'На транспортное средство предполагается установка комплекта газобаллонного оборудования для питания двигателя природным газом (пропан).' });
   
-  const [files, setFiles] = useState({ passport: [], snils: [], sts: [], pts: [] });
-  const [existingCloudFiles, setExistingCloudFiles] = useState({ passport: [], snils: [], sts: [], pts: [] });
+  // ИЗМЕНЕНО: Расширенный список файлов
+  const defaultFiles = {
+      passport: [], snils: [], sts: [], pts: [], egrn: [],
+      balloon_passport: [], act_opresovki: [], cert_gbo: [], cert_balloon: [],
+      pte: [], zd: [], form207: [], gibdd_zayavlenie: [],
+      photo_left: [], photo_right: [], photo_rear: [], photo_front: [],
+      photo_hood: [], photo_vin: [], photo_kuzov: [], photo_tablichka: [],
+      photo_balloon_place: [], photo_balloon_tablichka: [], photo_vent: [],
+      photo_mult: [], photo_reduktor: [], photo_ebu: [], photo_forsunki: [], photo_vzu: []
+  };
+
+  const [files, setFiles] = useState(defaultFiles);
+  const [existingCloudFiles, setExistingCloudFiles] = useState(defaultFiles);
   const [fileStatuses, setFileStatuses] = useState({});
 
-  // ИЗМЕНЕНО: Добавлена функция фоновой проверки и синхронизации папок
+  // ИЗМЕНЕНО: Динамический список шагов (5-й шаг меняет название)
+  const steps = [
+    { id: 1, title: 'Заявитель' }, 
+    { id: 2, title: 'Данные' }, 
+    { id: 3, title: 'Услуга' }, 
+    { id: 4, title: 'Документы' }, 
+    { id: 5, title: docType === 'pz' ? 'Описание' : 'Фотографии' },
+  ];
+
   const triggerSync = () => {
       if (activeFolderName) {
           const data = new FormData();
@@ -45,17 +57,11 @@ export default function RegistrationFlow({ editingRequest }) {
           data.append('folderName', activeFolderName);
           const authTok = getToken();
           if (authTok) {
-              fetch('/api/upload', {
-                  method: 'POST',
-                  headers: { 'Authorization': `Bearer ${authTok}` },
-                  body: data,
-                  keepalive: true
-              }).catch(() => {});
+              fetch('/api/upload', { method: 'POST', headers: { 'Authorization': `Bearer ${authTok}` }, body: data, keepalive: true }).catch(() => {});
           }
       }
   };
 
-  // ИЗМЕНЕНО: Синхронизация при закрытии окна или уходе со страницы
   useEffect(() => {
     const handleBeforeUnload = (e) => {
         triggerSync();
@@ -68,7 +74,7 @@ export default function RegistrationFlow({ editingRequest }) {
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => {
         window.removeEventListener('beforeunload', handleBeforeUnload);
-        triggerSync(); // Срабатывает при выходе к списку заявок (размонтирование)
+        triggerSync(); 
     };
   }, [currentStep, showSuccess, isNewApplication, activeFolderName]);
 
@@ -92,7 +98,7 @@ export default function RegistrationFlow({ editingRequest }) {
             .then(data => {
                 if (data.found) {
                     setActiveFolderName(data.folderName);
-                    if (data.existingFiles) setExistingCloudFiles(data.existingFiles);
+                    if (data.existingFiles) setExistingCloudFiles({...defaultFiles, ...data.existingFiles});
                     if (data.hasDescription) {
                         setHasExistingDescription(true);
                         setIsDescriptionEditable(false);
@@ -114,9 +120,10 @@ export default function RegistrationFlow({ editingRequest }) {
         setCurrentStep(1);
         setIsNewApplication(true);
         setActiveFolderName('');
+        setCopyDocsFromPZ(false);
         setFormData({ fullName: '', companyName: '', licensePlate: '', conversionType: 'На транспортное средство предполагается установка комплекта газобаллонного оборудования для питания двигателя природным газом (пропан).' });
-        setFiles({ passport: [], snils: [], sts: [], pts: [] });
-        setExistingCloudFiles({ passport: [], snils: [], sts: [], pts: [] });
+        setFiles(defaultFiles);
+        setExistingCloudFiles(defaultFiles);
     }
   }, [editingRequest]);
 
@@ -199,7 +206,7 @@ export default function RegistrationFlow({ editingRequest }) {
   const handleDecision = (choice) => {
     if (choice === 'continue') {
       setFormData(prev => ({ ...prev, fullName: searchCache.fullName }));
-      if (searchCache.existingFiles) setExistingCloudFiles(searchCache.existingFiles);
+      if (searchCache.existingFiles) setExistingCloudFiles({...defaultFiles, ...searchCache.existingFiles});
       setActiveFolderName(searchCache.folderName);
       setIsNewApplication(false);
       
@@ -209,10 +216,11 @@ export default function RegistrationFlow({ editingRequest }) {
       }
     } else {
       setFormData(prev => ({ ...prev, fullName: '', companyName: '' }));
-      setFiles({ passport: [], snils: [], sts: [], pts: [] });
-      setExistingCloudFiles({ passport: [], snils: [], sts: [], pts: [] });
+      setFiles(defaultFiles);
+      setExistingCloudFiles(defaultFiles);
       setActiveFolderName('');
       setIsNewApplication(true);
+      setCopyDocsFromPZ(false);
       setHasExistingDescription(false);
       setIsDescriptionEditable(true);
     }
@@ -285,7 +293,7 @@ export default function RegistrationFlow({ editingRequest }) {
           return nextStats;
       });
 
-      setFiles(prev => ({ ...prev, [category]: [...prev[category], ...valid] }));
+      setFiles(prev => ({ ...prev, [category]: [...(prev[category] || []), ...valid] }));
     } finally { setIsCompressing(false); e.target.value = ''; }
   };
 
@@ -296,6 +304,7 @@ export default function RegistrationFlow({ editingRequest }) {
     data.append('folderName', activeFolderName);
     data.append('docType', docType);
     data.append('conversionType', formData.conversionType);
+    data.append('copyDocsFromPZ', copyDocsFromPZ.toString()); // ИЗМЕНЕНО: Передаем статус тумблера
     
     const isPz = docType === 'pz';
     const needsDescription = isPz && (!hasExistingDescription || isDescriptionEditable);
@@ -314,7 +323,7 @@ export default function RegistrationFlow({ editingRequest }) {
   const isAnyFilePending = Object.values(fileStatuses).some(status => status.state === 'pending');
 
   const handleNextStep = async () => {
-      triggerSync(); // ИЗМЕНЕНО: Выполняется проверка папок при нажатии Далее
+      triggerSync();
       if (currentStep === 1) { setCurrentStep(2); return; }
       
       if (currentStep === 2) {
@@ -357,18 +366,30 @@ export default function RegistrationFlow({ editingRequest }) {
           setIsSubmitting(false);
       }
 
-      if (currentStep === 4) {
-          if (isAnyFileUploading) {
-              return showAlert("Загрузка файлов", "Пожалуйста, дождитесь окончания загрузки файлов перед переходом на другой этап.", "info");
-          }
-          if (isAnyFilePending) {
-              return showAlert("Внимание", "Для перехода на следующий этап необходимо нажать кнопку загрузки для всех выбранных файлов.", "info");
-          }
+      // ИЗМЕНЕНО: Проверка невыгруженных файлов перенесена на финальный шаг отправки
+      if (currentStep < 5) {
+          setCurrentStep(prev => prev + 1); 
+      } else {
+          if (isAnyFileUploading) return showAlert("Загрузка файлов", "Пожалуйста, дождитесь окончания загрузки файлов.", "info");
+          if (isAnyFilePending) return showAlert("Внимание", "Необходимо нажать кнопку загрузки для всех выбранных файлов.", "info");
+          handleSubmit();
       }
-
-      if (currentStep < 5) setCurrentStep(prev => prev + 1); 
-      else handleSubmit();
   };
+
+  // ИЗМЕНЕНО: Вспомогательная функция для рендера UploadCard
+  const renderUploadCard = (title, desc, category) => (
+      <UploadCard 
+          key={category}
+          title={title} 
+          desc={desc} 
+          files={files[category] || []} 
+          existing={existingCloudFiles[category] || []} 
+          onUpload={e => handleFileChange(e, category)} 
+          onRemove={i => setFiles({...files, [category]: files[category].filter((_,idx)=>idx!==i)})} 
+          fileStatuses={fileStatuses} 
+          onSimulateUpload={(f) => handleRealUpload(f, category)} 
+      />
+  );
 
   return (
     <div className="bg-white rounded-3xl shadow-xl border border-regdoc-grey overflow-hidden max-w-2xl mx-auto relative min-h-[500px]">
@@ -486,36 +507,111 @@ export default function RegistrationFlow({ editingRequest }) {
         {currentStep === 4 && (
           <div className="space-y-4 animate-in slide-in-from-bottom-2">
             <h3 className="font-bold text-lg text-regdoc-navy">Загрузите фотографии или PDF</h3>
+            
+            {docType === 'pb' && (
+                <div className="bg-regdoc-mist p-4 rounded-2xl border border-regdoc-cyan/30 flex items-center justify-between cursor-pointer mb-2" onClick={() => setCopyDocsFromPZ(!copyDocsFromPZ)}>
+                    <div>
+                        <div className="font-bold text-sm text-regdoc-navy">Взять базовые документы из ПЗ</div>
+                        <div className="text-[10px] text-regdoc-navy/60 uppercase font-bold mt-1">Скопировать ПТС, СТС, Паспорт, СНИЛС</div>
+                    </div>
+                    <div className={`w-12 h-6 rounded-full transition-colors flex items-center px-1 shrink-0 ${copyDocsFromPZ ? 'bg-regdoc-cyan' : 'bg-regdoc-grey'}`}>
+                        <div className={`w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${copyDocsFromPZ ? 'translate-x-6' : 'translate-x-0'}`}></div>
+                    </div>
+                </div>
+            )}
+
             <div className="bg-regdoc-mist p-3 rounded-2xl flex gap-3 text-regdoc-teal text-xs border border-regdoc-cyan/25">
               <Info size={16} className="shrink-0 mt-0.5 text-regdoc-cyan" />
               <p>Ограничение по размеру одного файла — <b>не более 5 МБ</b>.</p>
             </div>
-            <UploadCard title="Паспорт собственника" desc="2 разворота" files={files.passport} existing={existingCloudFiles.passport} onUpload={e => handleFileChange(e, 'passport')} onRemove={i => setFiles({...files, passport: files.passport.filter((_,idx)=>idx!==i)})} fileStatuses={fileStatuses} onSimulateUpload={(f) => handleRealUpload(f, 'passport')} />
-            <UploadCard title="СНИЛС" desc="Лицевая сторона" files={files.snils} existing={existingCloudFiles.snils} onUpload={e => handleFileChange(e, 'snils')} onRemove={i => setFiles({...files, snils: files.snils.filter((_,idx)=>idx!==i)})} fileStatuses={fileStatuses} onSimulateUpload={(f) => handleRealUpload(f, 'snils')} />
-            <UploadCard title="СТС" desc="Обе стороны" files={files.sts} existing={existingCloudFiles.sts} onUpload={e => handleFileChange(e, 'sts')} onRemove={i => setFiles({...files, sts: files.sts.filter((_,idx)=>idx!==i)})} fileStatuses={fileStatuses} onSimulateUpload={(f) => handleRealUpload(f, 'sts')} />
-            <UploadCard title="ПТС" desc="Все страницы" files={files.pts} existing={existingCloudFiles.pts} onUpload={e => handleFileChange(e, 'pts')} onRemove={i => setFiles({...files, pts: files.pts.filter((_,idx)=>idx!==i)})} fileStatuses={fileStatuses} onSimulateUpload={(f) => handleRealUpload(f, 'pts')} />
+            
+            {/* ИЗМЕНЕНО: Динамический рендер карточек в зависимости от выбранного типа услуги и клиента */}
+            {docType === 'pz' && clientType === 'individual' && (
+                <>
+                    {renderUploadCard("ПТС / ЭПТС", "Одним файлом", "pts")}
+                    {renderUploadCard("СРТС", "Одним файлом", "sts")}
+                    {renderUploadCard("Паспорт собственника", "2 разворота", "passport")}
+                    {renderUploadCard("СНИЛС", "Скан или четкое фото", "snils")}
+                </>
+            )}
+
+            {docType === 'pz' && clientType === 'legal' && (
+                <>
+                    {renderUploadCard("Выписка из ЕГРН", "Если собственник юр. лицо", "egrn")}
+                    {renderUploadCard("Паспорт", "Представителя+доверенность или руководителя", "passport")}
+                    {renderUploadCard("ПТС / ЭПТС", "Одним файлом", "pts")}
+                    {renderUploadCard("СРТС", "Одним файлом", "sts")}
+                </>
+            )}
+
+            {docType === 'pb' && (
+                <>
+                    {!copyDocsFromPZ && (
+                        <>
+                            {renderUploadCard("ПТС / ЭПТС", "Одним файлом", "pts")}
+                            {renderUploadCard("СРТС", "Одним файлом", "sts")}
+                            {renderUploadCard("Паспорт", "Собственника", "passport")}
+                            {renderUploadCard("СНИЛС", "Скан или четкое фото", "snils")}
+                        </>
+                    )}
+                    {renderUploadCard("Паспорт на баллон", "Одним файлом", "balloon_passport")}
+                    {renderUploadCard("Акт опрессовки", "Если баллон старше 2х лет", "act_opresovki")}
+                    {renderUploadCard("Сертификат ГБО", "На оборудование", "cert_gbo")}
+                    {renderUploadCard("Сертификат баллона", "На баллон", "cert_balloon")}
+                    {renderUploadCard("Предварительное заключение", "Одним файлом", "pte")}
+                    {renderUploadCard("Заявление декларация", "Подписанная", "zd")}
+                    {renderUploadCard("Форма 207", "Одним файлом", "form207")}
+                    {renderUploadCard("Заявление в ГИБДД", "Подписанное", "gibdd_zayavlenie")}
+                </>
+            )}
           </div>
         )}
 
         {currentStep === 5 && (
-          <div className="space-y-4">
-            <div className="flex justify-between items-center mb-2">
-                <h3 className="font-bold text-lg text-regdoc-navy">Тип переоборудования</h3>
-                {hasExistingDescription && !isDescriptionEditable && (
-                    <button 
-                        onClick={() => setIsDescriptionEditable(true)}
-                        className="px-4 py-1.5 bg-regdoc-grey text-regdoc-navy/65 font-bold rounded-xl shadow-sm hover:bg-regdoc-grey/80 transition-all text-[11px] uppercase tracking-wider"
-                    >
-                        Изменить
-                    </button>
-                )}
-            </div>
-            <textarea 
-                className={`w-full h-44 p-5 rounded-2xl outline-none focus:border-regdoc-cyan leading-relaxed transition-all ${!isDescriptionEditable ? 'bg-regdoc-grey/50 border border-regdoc-grey text-regdoc-navy/40 cursor-not-allowed' : 'bg-white border border-regdoc-grey text-regdoc-navy'}`} 
-                value={formData.conversionType} 
-                onChange={e => setFormData({...formData, conversionType: e.target.value})} 
-                disabled={!isDescriptionEditable}
-            />
+          <div className="space-y-4 animate-in slide-in-from-bottom-2">
+            {docType === 'pz' ? (
+                <>
+                    <div className="flex justify-between items-center mb-2">
+                        <h3 className="font-bold text-lg text-regdoc-navy">Тип переоборудования</h3>
+                        {hasExistingDescription && !isDescriptionEditable && (
+                            <button 
+                                onClick={() => setIsDescriptionEditable(true)}
+                                className="px-4 py-1.5 bg-regdoc-grey text-regdoc-navy/65 font-bold rounded-xl shadow-sm hover:bg-regdoc-grey/80 transition-all text-[11px] uppercase tracking-wider"
+                            >
+                                Изменить
+                            </button>
+                        )}
+                    </div>
+                    <textarea 
+                        className={`w-full h-44 p-5 rounded-2xl outline-none focus:border-regdoc-cyan leading-relaxed transition-all ${!isDescriptionEditable ? 'bg-regdoc-grey/50 border border-regdoc-grey text-regdoc-navy/40 cursor-not-allowed' : 'bg-white border border-regdoc-grey text-regdoc-navy'}`} 
+                        value={formData.conversionType} 
+                        onChange={e => setFormData({...formData, conversionType: e.target.value})} 
+                        disabled={!isDescriptionEditable}
+                    />
+                </>
+            ) : (
+                <>
+                    <h3 className="font-bold text-lg text-regdoc-navy mb-4">Фотографии ТС</h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {renderUploadCard("Фото ТС слева", "", "photo_left")}
+                        {renderUploadCard("Фото ТС справа", "", "photo_right")}
+                        {renderUploadCard("Фото ТС сзади", "", "photo_rear")}
+                        {renderUploadCard("Фото ТС спереди", "", "photo_front")}
+                        {renderUploadCard("Капот открыт", "", "photo_hood")}
+                        {renderUploadCard("VIN / номер шасси", "В 3-х местах", "photo_vin")}
+                        {renderUploadCard("Номер кузова", "", "photo_kuzov")}
+                        {renderUploadCard("Табличка идентификации", "", "photo_tablichka")}
+                        {renderUploadCard("Место баллона", "", "photo_balloon_place")}
+                        {renderUploadCard("Табличка баллона", "", "photo_balloon_tablichka")}
+                        {renderUploadCard("Вент. каналы", "Если баллон в багажнике", "photo_vent")}
+                        {renderUploadCard("Мульт с катушкой", "", "photo_mult")}
+                        {renderUploadCard("Редуктор", "", "photo_reduktor")}
+                        {renderUploadCard("ЭБУ", "", "photo_ebu")}
+                        {renderUploadCard("Форсунки", "", "photo_forsunki")}
+                        {renderUploadCard("ВЗУ", "", "photo_vzu")}
+                    </div>
+                </>
+            )}
           </div>
         )}
 
@@ -523,7 +619,7 @@ export default function RegistrationFlow({ editingRequest }) {
           <div className="flex gap-3">
             {currentStep > 1 && currentStep < 5 && (
               <button onClick={() => {
-                  triggerSync(); // ИЗМЕНЕНО: Выполняется проверка папок при нажатии Назад
+                  triggerSync();
                   if (currentStep === 4 && isAnyFileUploading) {
                       return showAlert("Загрузка файлов", "Пожалуйста, дождитесь окончания загрузки файлов перед переходом на другой этап.", "info");
                   }
@@ -572,18 +668,18 @@ function Input({ label, value, onChange, onInput, placeholder, isMono }) {
 
 function UploadCard({ title, desc, files, existing, onUpload, onRemove, fileStatuses, onSimulateUpload }) {
   return (
-    <div className="border border-regdoc-grey rounded-2xl p-4 bg-regdoc-grey/35">
+    <div className="border border-regdoc-grey rounded-2xl p-4 bg-regdoc-grey/35 h-full flex flex-col">
       <div className="flex justify-between items-start mb-3">
         <div>
           <div className="font-bold text-regdoc-navy text-sm leading-none">{title}</div>
-          <div className="text-[10px] text-regdoc-navy/45 uppercase font-bold mt-1 tracking-tight">{desc}</div>
+          {desc && <div className="text-[10px] text-regdoc-navy/45 uppercase font-bold mt-1 tracking-tight">{desc}</div>}
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 shrink-0 ml-2">
             <label className="bg-white p-2.5 rounded-xl shadow-sm border border-regdoc-grey cursor-pointer text-regdoc-navy/50 hover:text-regdoc-cyan active:scale-95 transition-all"><Paperclip size={20} /><input type="file" multiple className="hidden" onChange={onUpload} accept="image/*,.pdf" /></label>
             <label className="sm:hidden bg-white p-2.5 rounded-xl shadow-sm border border-regdoc-grey cursor-pointer text-regdoc-cyan active:scale-95 transition-all"><Camera size={20} /><input type="file" className="hidden" onChange={onUpload} accept="image/*" capture="environment" /></label>
         </div>
       </div>
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-2 mt-auto">
         {existing && existing.map((name, i) => (
             <div key={i} className="bg-regdoc-mist border border-regdoc-cyan/30 px-2.5 py-1.5 rounded-xl text-[10px] text-regdoc-teal flex items-center gap-1 font-semibold animate-in zoom-in-95">
                 <Check size={10} strokeWidth={3} /> {name} (В облаке)
@@ -596,7 +692,7 @@ function UploadCard({ title, desc, files, existing, onUpload, onRemove, fileStat
                 <div key={i} className="bg-white border border-regdoc-cyan/25 p-2 rounded-xl text-[10px] flex flex-col gap-1.5 shadow-sm animate-in zoom-in-95 min-w-[140px] flex-1">
                     <div className="flex items-center justify-between gap-2">
                         <span className="truncate max-w-[100px] font-medium text-regdoc-navy">{f.name}</span>
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1 shrink-0">
                             {status.state === 'pending' && (
                                 <button onClick={() => onSimulateUpload(f)} className="text-white bg-regdoc-cyan hover:bg-regdoc-teal rounded-md p-0.5 transition-colors shadow-md" title="Загрузить на сервер">
                                     <Check size={12} strokeWidth={4} />
