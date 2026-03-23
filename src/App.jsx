@@ -41,19 +41,37 @@ function App() {
     [],
   );
 
+  // ИЗМЕНЕНО: Оптимизация стилей плашки для мобильных телефонов
   const StatusBadge = ({ label, isGreen, onClick, tooltip }) => (
     <button
       onClick={onClick}
       title={tooltip}
-      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wider border transition-all ${isGreen ? 'bg-regdoc-mist border-regdoc-cyan/30 text-regdoc-teal hover:border-regdoc-cyan' : 'border-gray-200 text-red-500 bg-red-50 hover:border-red-300'}`}
+      className={`flex items-center justify-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 rounded-xl text-[9px] sm:text-[10px] font-bold uppercase tracking-wider border transition-all flex-1 sm:flex-none ${isGreen ? 'bg-regdoc-mist border-regdoc-cyan/30 text-regdoc-teal hover:border-regdoc-cyan' : 'border-gray-200 text-red-500 bg-red-50 hover:border-red-300'}`}
     >
-      <CheckCircle2 size={12} className={isGreen ? 'text-regdoc-cyan' : 'text-red-400'} />
-      {label}
+      <CheckCircle2 size={12} className={`shrink-0 ${isGreen ? 'text-regdoc-cyan' : 'text-red-400'}`} />
+      <span className="whitespace-nowrap truncate">{label}</span>
     </button>
   );
 
-  // ИЗМЕНЕНО: Эффект теперь зависит от [user, screen]. 
-  // При КАЖДОМ открытии кабинета отправляется запрос, который проверяет папки и requests.xlsx
+  // ИЗМЕНЕНО: Функция завершения работы с формой (проверка папок и переадресация)
+  const handleFlowComplete = () => {
+    setEditingRequest(null);
+    setLoadingReqs(true);
+    // Обращение к /api/my-requests само по себе заставляет бэкенд 
+    // проверить папки, обновить requests.xlsx и вернуть свежий список
+    authFetch('/api/my-requests')
+      .then(res => res.json())
+      .then(data => { 
+        if (Array.isArray(data)) {
+          setRequests(data);
+          if (data.length > 0) setScreen('cabinet');
+          else setScreen('register');
+        }
+      })
+      .catch(err => console.error(err))
+      .finally(() => setLoadingReqs(false));
+  };
+
   useEffect(() => {
     if (user) {
       setLoadingReqs(true);
@@ -165,34 +183,35 @@ function App() {
 
                     return (
                       <div key={idx} className="p-4 rounded-2xl border border-regdoc-grey bg-regdoc-grey/20">
-                        <div className="flex justify-between items-center gap-4">
-                          <div className="shrink-0">
+                        {/* ИЗМЕНЕНО: Оптимизирована сетка под мобильные */}
+                        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                          <div className="shrink-0 w-full sm:w-auto">
                             <div className="text-xl font-black text-regdoc-navy tracking-tight">{formatPlate(req.car_number)}</div>
                             <div className="text-[10px] font-bold text-regdoc-navy/40 uppercase">{req.full_name?.replace(/_/g, ' ')}</div>
                           </div>
-                          <div className="flex flex-col gap-2 items-end">
-                            <div className="flex gap-2">
+                          <div className="flex flex-col gap-2 w-full sm:w-auto items-end">
+                            <div className="flex gap-2 w-full sm:w-auto">
                               <StatusBadge 
-                                label="Документы для ПЗ" 
+                                label="Документы ПЗ" 
                                 isGreen={req.type_PZ === 'yes'} 
                                 onClick={() => cta.onEditRequest(req, 'pz', req.type_PZ === 'yes' ? 4 : 3)} 
                                 tooltip={req.type_PZ !== 'yes' ? "Не хватает документов" : undefined} 
                               />
                               <StatusBadge 
-                                label="ПЗ: готово" 
+                                label="ПЗ" 
                                 isGreen={isPZ_Ready} 
                                 onClick={() => setActiveAlert(isPZ_Ready ? 'dev' : 'work')} 
                               />
                             </div>
-                            <div className="flex gap-2">
+                            <div className="flex gap-2 w-full sm:w-auto">
                               <StatusBadge 
-                                label="Документы для ПБ" 
+                                label="Документы ПБ" 
                                 isGreen={req.type_PB === 'yes'} 
                                 onClick={() => cta.onEditRequest(req, 'pb', req.type_PB === 'yes' ? 4 : 3)} 
                                 tooltip={req.type_PB !== 'yes' ? "Не хватает документов" : undefined} 
                               />
                               <StatusBadge 
-                                label="ПБ: готово" 
+                                label="ПБ" 
                                 isGreen={isPB_Ready} 
                                 onClick={() => setActiveAlert(isPB_Ready ? 'dev' : 'work')} 
                               />
@@ -230,7 +249,8 @@ function App() {
                 <div className="flex items-center gap-2"><ShieldCheck className="w-4 h-4 text-amber-400" />Официально</div>
               </div>
             </div>
-            <RegistrationFlow editingRequest={editingRequest} />
+            {/* ИЗМЕНЕНО: Передаем функцию handleFlowComplete внутрь */}
+            <RegistrationFlow editingRequest={editingRequest} onComplete={handleFlowComplete} />
           </main>
         )}
         <footer className="text-center text-[11px] text-regdoc-navy/45 pb-4 flex flex-wrap items-center justify-center gap-x-3 gap-y-1">

@@ -3,7 +3,8 @@ import { Check, ChevronRight, User, Briefcase, FileSignature, FileCheck2, Camera
 import imageCompression from 'browser-image-compression';
 import { authFetch, getToken } from '../lib/api.js';
 
-export default function RegistrationFlow({ editingRequest }) {
+// ИЗМЕНЕНО: Принимаем новый пропс onComplete
+export default function RegistrationFlow({ editingRequest, onComplete }) {
   const [currentStep, setCurrentStep] = useState(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isCompressing, setIsCompressing] = useState(false);
@@ -23,10 +24,9 @@ export default function RegistrationFlow({ editingRequest }) {
 
   const [clientType, setClientType] = useState('individual');
   const [docType, setDocType] = useState('pz');
-  const [copyDocsFromPZ, setCopyDocsFromPZ] = useState(false); // ИЗМЕНЕНО: Состояние тумблера
+  const [copyDocsFromPZ, setCopyDocsFromPZ] = useState(false); 
   const [formData, setFormData] = useState({ fullName: '', companyName: '', licensePlate: '', conversionType: 'На транспортное средство предполагается установка комплекта газобаллонного оборудования для питания двигателя природным газом (пропан).' });
   
-  // ИЗМЕНЕНО: Расширенный список файлов
   const defaultFiles = {
       passport: [], snils: [], sts: [], pts: [], egrn: [],
       balloon_passport: [], act_opresovki: [], cert_gbo: [], cert_balloon: [],
@@ -41,7 +41,6 @@ export default function RegistrationFlow({ editingRequest }) {
   const [existingCloudFiles, setExistingCloudFiles] = useState(defaultFiles);
   const [fileStatuses, setFileStatuses] = useState({});
 
-  // ИЗМЕНЕНО: Динамический список шагов (5-й шаг меняет название)
   const steps = [
     { id: 1, title: 'Заявитель' }, 
     { id: 2, title: 'Данные' }, 
@@ -60,6 +59,13 @@ export default function RegistrationFlow({ editingRequest }) {
               fetch('/api/upload', { method: 'POST', headers: { 'Authorization': `Bearer ${authTok}` }, body: data, keepalive: true }).catch(() => {});
           }
       }
+  };
+
+  // ИЗМЕНЕНО: Единая функция для корректного выхода в список заявок (или на первый этап)
+  const finishFlow = () => {
+      triggerSync();
+      if (onComplete) onComplete();
+      else window.location.reload();
   };
 
   useEffect(() => {
@@ -174,7 +180,8 @@ export default function RegistrationFlow({ editingRequest }) {
           data.append('folderName', activeFolderName);
           try { await authFetch('/api/upload', { method: 'POST', body: data }); } catch(e) {}
       }
-      window.location.reload(); 
+      // ИЗМЕНЕНО: Вызов функции завершения вместо жесткой перезагрузки страницы
+      finishFlow(); 
   };
 
   const validateFullName = (name) => {
@@ -304,7 +311,7 @@ export default function RegistrationFlow({ editingRequest }) {
     data.append('folderName', activeFolderName);
     data.append('docType', docType);
     data.append('conversionType', formData.conversionType);
-    data.append('copyDocsFromPZ', copyDocsFromPZ.toString()); // ИЗМЕНЕНО: Передаем статус тумблера
+    data.append('copyDocsFromPZ', copyDocsFromPZ.toString()); 
     
     const isPz = docType === 'pz';
     const needsDescription = isPz && (!hasExistingDescription || isDescriptionEditable);
@@ -366,7 +373,6 @@ export default function RegistrationFlow({ editingRequest }) {
           setIsSubmitting(false);
       }
 
-      // ИЗМЕНЕНО: Проверка невыгруженных файлов перенесена на финальный шаг отправки
       if (currentStep < 5) {
           setCurrentStep(prev => prev + 1); 
       } else {
@@ -376,7 +382,6 @@ export default function RegistrationFlow({ editingRequest }) {
       }
   };
 
-  // ИЗМЕНЕНО: Вспомогательная функция для рендера UploadCard
   const renderUploadCard = (title, desc, category) => (
       <UploadCard 
           key={category}
@@ -417,7 +422,7 @@ export default function RegistrationFlow({ editingRequest }) {
           <div className="bg-white rounded-[40px] p-8 w-full max-w-md shadow-2xl text-center">
             <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4"><XCircle size={32} /></div>
             <h3 className="text-xl font-bold text-regdoc-navy mb-2">Отменить заявку?</h3>
-            <p className="text-regdoc-navy/55 text-sm mb-8">Вы хотите завершить отправку (сохранить загруженные файлов) или отменить и полностью удалить всю папку с сервера?</p>
+            <p className="text-regdoc-navy/55 text-sm mb-8">Вы хотите завершить отправку (сохранить загруженные файлы) или отменить и полностью удалить всю папку с сервера?</p>
             <div className="space-y-3">
                 <button onClick={() => setShowExitPrompt(false)} className="w-full py-4 bg-regdoc-cyan text-white font-bold rounded-2xl hover:bg-regdoc-teal transition-all">Завершить отправку</button>
                 <button onClick={() => setShowExitPrompt(false)} className="w-full py-4 bg-regdoc-grey text-regdoc-navy/65 font-bold rounded-2xl hover:bg-regdoc-grey/80 transition-all">Назад</button>
@@ -447,7 +452,8 @@ export default function RegistrationFlow({ editingRequest }) {
             <div className="w-20 h-20 bg-regdoc-mist text-regdoc-cyan rounded-full flex items-center justify-center mx-auto mb-6"><CheckCircle2 size={48} /></div>
             <h3 className="text-regdoc-navy/40 text-[10px] font-bold uppercase tracking-[0.2em] mb-2 text-center">Ответ от регистратора:</h3>
             <p className="text-xl font-bold text-regdoc-navy mb-8 text-center">Заявка принята в работу!</p>
-            <button onClick={() => window.location.reload()} className="w-full py-4 bg-regdoc-cyan text-white font-bold rounded-2xl shadow-lg shadow-regdoc-navy/25 hover:bg-regdoc-teal transition-colors">Отлично</button>
+            {/* ИЗМЕНЕНО: Вызов функции завершения вместо жесткой перезагрузки страницы */}
+            <button onClick={finishFlow} className="w-full py-4 bg-regdoc-cyan text-white font-bold rounded-2xl shadow-lg shadow-regdoc-navy/25 hover:bg-regdoc-teal transition-colors">Отлично</button>
           </div>
         </div>
       )}
@@ -525,7 +531,6 @@ export default function RegistrationFlow({ editingRequest }) {
               <p>Ограничение по размеру одного файла — <b>не более 5 МБ</b>.</p>
             </div>
             
-            {/* ИЗМЕНЕНО: Динамический рендер карточек в зависимости от выбранного типа услуги и клиента */}
             {docType === 'pz' && clientType === 'individual' && (
                 <>
                     {renderUploadCard("ПТС / ЭПТС", "Одним файлом", "pts")}
