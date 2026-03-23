@@ -1,5 +1,5 @@
 const API_HINT =
-  'Запустите API: в корне проекта выполните «npm run dev:all» или в двух терминалах «npm run api» (порт 8787) и «npm run dev».';
+  'Остановите процесс и запустите из корня проекта команду «npm run dev» — она поднимает и сайт, и API (порт 8787). Либо в двух терминалах: «npm run api» и «npm run dev:vite».';
 
 export async function postJson(url, body) {
   let res;
@@ -24,6 +24,9 @@ export async function postJson(url, body) {
   }
 
   if (!res.ok) {
+    if (res.status === 502 || res.status === 503 || res.status === 504) {
+      throw new Error(`Сервер API недоступен (код ${res.status}). ${API_HINT}`);
+    }
     const err = new Error(data.error || `Ошибка ${res.status}`);
     err.status = res.status;
     err.payload = data;

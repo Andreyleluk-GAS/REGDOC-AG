@@ -4,9 +4,10 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently -k -n api,vite -c cyan,magenta \"node server.js\" \"vite\"",
+    "dev:vite": "vite",
     "api": "node server.js",
-    "dev:all": "concurrently -n api,vite -c cyan,magenta \"npm run api\" \"npm run dev\"",
+    "dev:all": "npm run dev",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"
