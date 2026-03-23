@@ -3,7 +3,6 @@ import { Check, ChevronRight, User, Briefcase, FileSignature, FileCheck2, Camera
 import imageCompression from 'browser-image-compression';
 import { authFetch, getToken } from '../lib/api.js';
 
-// ИЗМЕНЕНО: Принимаем новый пропс onComplete
 export default function RegistrationFlow({ editingRequest, onComplete }) {
   const [currentStep, setCurrentStep] = useState(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -24,7 +23,11 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
 
   const [clientType, setClientType] = useState('individual');
   const [docType, setDocType] = useState('pz');
-  const [copyDocsFromPZ, setCopyDocsFromPZ] = useState(false); 
+  
+  // ИЗМЕНЕНО: Состояния для точечного копирования файлов из ПЗ
+  const [availablePzFiles, setAvailablePzFiles] = useState({});
+  const [selectedPzCopies, setSelectedPzCopies] = useState({});
+
   const [formData, setFormData] = useState({ fullName: '', companyName: '', licensePlate: '', conversionType: 'На транспортное средство предполагается установка комплекта газобаллонного оборудования для питания двигателя природным газом (пропан).' });
   
   const defaultFiles = {
@@ -61,7 +64,6 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
       }
   };
 
-  // ИЗМЕНЕНО: Единая функция для корректного выхода в список заявок (или на первый этап)
   const finishFlow = () => {
       triggerSync();
       if (onComplete) onComplete();
@@ -105,6 +107,18 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
                 if (data.found) {
                     setActiveFolderName(data.folderName);
                     if (data.existingFiles) setExistingCloudFiles({...defaultFiles, ...data.existingFiles});
+                    
+                    // ИЗМЕНЕНО: Обработка наличия файлов в ПЗ для тумблеров
+                    if (data.pzFiles) {
+                        setAvailablePzFiles({
+                            passport: data.pzFiles.passport?.length > 0,
+                            snils: data.pzFiles.snils?.length > 0,
+                            sts: data.pzFiles.sts?.length > 0,
+                            pts: data.pzFiles.pts?.length > 0,
+                            egrn: data.pzFiles.egrn?.length > 0,
+                        });
+                    }
+
                     if (data.hasDescription) {
                         setHasExistingDescription(true);
                         setIsDescriptionEditable(false);
@@ -126,7 +140,8 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
         setCurrentStep(1);
         setIsNewApplication(true);
         setActiveFolderName('');
-        setCopyDocsFromPZ(false);
+        setAvailablePzFiles({});
+        setSelectedPzCopies({});
         setFormData({ fullName: '', companyName: '', licensePlate: '', conversionType: 'На транспортное средство предполагается установка комплекта газобаллонного оборудования для питания двигателя природным газом (пропан).' });
         setFiles(defaultFiles);
         setExistingCloudFiles(defaultFiles);
@@ -180,7 +195,6 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
           data.append('folderName', activeFolderName);
           try { await authFetch('/api/upload', { method: 'POST', body: data }); } catch(e) {}
       }
-      // ИЗМЕНЕНО: Вызов функции завершения вместо жесткой перезагрузки страницы
       finishFlow(); 
   };
 
@@ -214,6 +228,18 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
     if (choice === 'continue') {
       setFormData(prev => ({ ...prev, fullName: searchCache.fullName }));
       if (searchCache.existingFiles) setExistingCloudFiles({...defaultFiles, ...searchCache.existingFiles});
+      
+      // ИЗМЕНЕНО: Обработка наличия файлов в ПЗ
+      if (searchCache.pzFiles) {
+          setAvailablePzFiles({
+              passport: searchCache.pzFiles.passport?.length > 0,
+              snils: searchCache.pzFiles.snils?.length > 0,
+              sts: searchCache.pzFiles.sts?.length > 0,
+              pts: searchCache.pzFiles.pts?.length > 0,
+              egrn: searchCache.pzFiles.egrn?.length > 0,
+          });
+      }
+
       setActiveFolderName(searchCache.folderName);
       setIsNewApplication(false);
       
@@ -227,7 +253,8 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
       setExistingCloudFiles(defaultFiles);
       setActiveFolderName('');
       setIsNewApplication(true);
-      setCopyDocsFromPZ(false);
+      setAvailablePzFiles({});
+      setSelectedPzCopies({});
       setHasExistingDescription(false);
       setIsDescriptionEditable(true);
     }
@@ -311,7 +338,10 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
     data.append('folderName', activeFolderName);
     data.append('docType', docType);
     data.append('conversionType', formData.conversionType);
-    data.append('copyDocsFromPZ', copyDocsFromPZ.toString()); 
+    
+    // ИЗМЕНЕНО: Отправляем только те файлы, на которых стоит тумблер копирования
+    const toCopy = Object.keys(selectedPzCopies).filter(k => selectedPzCopies[k]);
+    data.append('filesToCopy', JSON.stringify(toCopy));
     
     const isPz = docType === 'pz';
     const needsDescription = isPz && (!hasExistingDescription || isDescriptionEditable);
@@ -382,19 +412,27 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
       }
   };
 
-  const renderUploadCard = (title, desc, category) => (
-      <UploadCard 
-          key={category}
-          title={title} 
-          desc={desc} 
-          files={files[category] || []} 
-          existing={existingCloudFiles[category] || []} 
-          onUpload={e => handleFileChange(e, category)} 
-          onRemove={i => setFiles({...files, [category]: files[category].filter((_,idx)=>idx!==i)})} 
-          fileStatuses={fileStatuses} 
-          onSimulateUpload={(f) => handleRealUpload(f, category)} 
-      />
-  );
+  // ИЗМЕНЕНО: Добавлены пропсы для тумблера копирования
+  const renderUploadCard = (title, desc, category) => {
+      const canCopy = docType === 'pb' && availablePzFiles[category];
+      const isCopied = selectedPzCopies[category] || false;
+      return (
+          <UploadCard 
+              key={category}
+              title={title} 
+              desc={desc} 
+              files={files[category] || []} 
+              existing={existingCloudFiles[category] || []} 
+              onUpload={e => handleFileChange(e, category)} 
+              onRemove={i => setFiles({...files, [category]: files[category].filter((_,idx)=>idx!==i)})} 
+              fileStatuses={fileStatuses} 
+              onSimulateUpload={(f) => handleRealUpload(f, category)}
+              canCopy={canCopy}
+              isCopied={isCopied}
+              onToggleCopy={() => setSelectedPzCopies(prev => ({...prev, [category]: !prev[category]}))}
+          />
+      );
+  };
 
   return (
     <div className="bg-white rounded-3xl shadow-xl border border-regdoc-grey overflow-hidden max-w-2xl mx-auto relative min-h-[500px]">
@@ -452,7 +490,6 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
             <div className="w-20 h-20 bg-regdoc-mist text-regdoc-cyan rounded-full flex items-center justify-center mx-auto mb-6"><CheckCircle2 size={48} /></div>
             <h3 className="text-regdoc-navy/40 text-[10px] font-bold uppercase tracking-[0.2em] mb-2 text-center">Ответ от регистратора:</h3>
             <p className="text-xl font-bold text-regdoc-navy mb-8 text-center">Заявка принята в работу!</p>
-            {/* ИЗМЕНЕНО: Вызов функции завершения вместо жесткой перезагрузки страницы */}
             <button onClick={finishFlow} className="w-full py-4 bg-regdoc-cyan text-white font-bold rounded-2xl shadow-lg shadow-regdoc-navy/25 hover:bg-regdoc-teal transition-colors">Отлично</button>
           </div>
         </div>
@@ -514,18 +551,6 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
           <div className="space-y-4 animate-in slide-in-from-bottom-2">
             <h3 className="font-bold text-lg text-regdoc-navy">Загрузите фотографии или PDF</h3>
             
-            {docType === 'pb' && (
-                <div className="bg-regdoc-mist p-4 rounded-2xl border border-regdoc-cyan/30 flex items-center justify-between cursor-pointer mb-2" onClick={() => setCopyDocsFromPZ(!copyDocsFromPZ)}>
-                    <div>
-                        <div className="font-bold text-sm text-regdoc-navy">Взять базовые документы из ПЗ</div>
-                        <div className="text-[10px] text-regdoc-navy/60 uppercase font-bold mt-1">Скопировать ПТС, СТС, Паспорт, СНИЛС</div>
-                    </div>
-                    <div className={`w-12 h-6 rounded-full transition-colors flex items-center px-1 shrink-0 ${copyDocsFromPZ ? 'bg-regdoc-cyan' : 'bg-regdoc-grey'}`}>
-                        <div className={`w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${copyDocsFromPZ ? 'translate-x-6' : 'translate-x-0'}`}></div>
-                    </div>
-                </div>
-            )}
-
             <div className="bg-regdoc-mist p-3 rounded-2xl flex gap-3 text-regdoc-teal text-xs border border-regdoc-cyan/25">
               <Info size={16} className="shrink-0 mt-0.5 text-regdoc-cyan" />
               <p>Ограничение по размеру одного файла — <b>не более 5 МБ</b>.</p>
@@ -551,14 +576,10 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
 
             {docType === 'pb' && (
                 <>
-                    {!copyDocsFromPZ && (
-                        <>
-                            {renderUploadCard("ПТС / ЭПТС", "Одним файлом", "pts")}
-                            {renderUploadCard("СРТС", "Одним файлом", "sts")}
-                            {renderUploadCard("Паспорт", "Собственника", "passport")}
-                            {renderUploadCard("СНИЛС", "Скан или четкое фото", "snils")}
-                        </>
-                    )}
+                    {renderUploadCard("ПТС / ЭПТС", "Одним файлом", "pts")}
+                    {renderUploadCard("СРТС", "Одним файлом", "sts")}
+                    {renderUploadCard("Паспорт", "Собственника", "passport")}
+                    {renderUploadCard("СНИЛС", "Скан или четкое фото", "snils")}
                     {renderUploadCard("Паспорт на баллон", "Одним файлом", "balloon_passport")}
                     {renderUploadCard("Акт опрессовки", "Если баллон старше 2х лет", "act_opresovki")}
                     {renderUploadCard("Сертификат ГБО", "На оборудование", "cert_gbo")}
@@ -671,13 +692,24 @@ function Input({ label, value, onChange, onInput, placeholder, isMono }) {
   );
 }
 
-function UploadCard({ title, desc, files, existing, onUpload, onRemove, fileStatuses, onSimulateUpload }) {
+// ИЗМЕНЕНО: Добавлены свойства canCopy, isCopied и функция onToggleCopy для визуализации тумблера
+function UploadCard({ title, desc, files, existing, onUpload, onRemove, fileStatuses, onSimulateUpload, canCopy, isCopied, onToggleCopy }) {
   return (
     <div className="border border-regdoc-grey rounded-2xl p-4 bg-regdoc-grey/35 h-full flex flex-col">
       <div className="flex justify-between items-start mb-3">
         <div>
           <div className="font-bold text-regdoc-navy text-sm leading-none">{title}</div>
           {desc && <div className="text-[10px] text-regdoc-navy/45 uppercase font-bold mt-1 tracking-tight">{desc}</div>}
+          
+          {canCopy && (
+            <div className="mt-2 flex items-center gap-2 cursor-pointer group" onClick={onToggleCopy}>
+                <div className={`w-8 h-4 rounded-full transition-colors flex items-center px-0.5 shrink-0 ${isCopied ? 'bg-regdoc-cyan' : 'bg-regdoc-grey group-hover:bg-regdoc-grey/80'}`}>
+                    <div className={`w-3 h-3 rounded-full bg-white shadow-sm transition-transform ${isCopied ? 'translate-x-4' : 'translate-x-0'}`}></div>
+                </div>
+                <div className="text-[9px] font-bold text-regdoc-navy/60 uppercase tracking-wider">Взять из ПЗ</div>
+            </div>
+          )}
+
         </div>
         <div className="flex gap-2 shrink-0 ml-2">
             <label className="bg-white p-2.5 rounded-xl shadow-sm border border-regdoc-grey cursor-pointer text-regdoc-navy/50 hover:text-regdoc-cyan active:scale-95 transition-all"><Paperclip size={20} /><input type="file" multiple className="hidden" onChange={onUpload} accept="image/*,.pdf" /></label>
@@ -685,6 +717,13 @@ function UploadCard({ title, desc, files, existing, onUpload, onRemove, fileStat
         </div>
       </div>
       <div className="flex flex-wrap gap-2 mt-auto">
+        
+        {isCopied && (
+             <div className="bg-regdoc-cyan/10 border border-regdoc-cyan/30 p-2 rounded-xl text-[10px] flex items-center gap-1.5 shadow-sm text-regdoc-teal font-bold animate-in zoom-in-95 w-full">
+                 <CheckCircle2 size={14} /> Отмечено для загрузки из ПЗ
+             </div>
+        )}
+
         {existing && existing.map((name, i) => (
             <div key={i} className="bg-regdoc-mist border border-regdoc-cyan/30 px-2.5 py-1.5 rounded-xl text-[10px] text-regdoc-teal flex items-center gap-1 font-semibold animate-in zoom-in-95">
                 <Check size={10} strokeWidth={3} /> {name} (В облаке)

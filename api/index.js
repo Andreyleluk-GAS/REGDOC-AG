@@ -138,7 +138,6 @@ app.get('/api/check-plate', async (req, res) => {
             const match = folder.basename.match(/\[.*?\]\[(.*?)\]\[.*?\]/);
             const extractedName = match ? match[1].replace(/_/g, ' ') : "Клиент";
             
-            // ИЗМЕНЕНО: Расширенная карта всех типов файлов для проверки наличия в облаке
             const existingFiles = {
                 passport: [], snils: [], sts: [], pts: [], egrn: [],
                 balloon_passport: [], act_opresovki: [], cert_gbo: [], cert_balloon: [],
@@ -148,6 +147,9 @@ app.get('/api/check-plate', async (req, res) => {
                 photo_balloon_place: [], photo_balloon_tablichka: [], photo_vent: [],
                 photo_mult: [], photo_reduktor: [], photo_ebu: [], photo_forsunki: [], photo_vzu: []
             };
+
+            // ИЗМЕНЕНО: Добавлена мапа для отслеживания файлов конкретно в папке ПЗ
+            const pzFilesMap = { passport: [], snils: [], sts: [], pts: [], egrn: [] };
 
             const ruToEnMap = {
                 'ПАСПОРТ': 'passport', 'СНИЛС': 'snils', 'СТС': 'sts', 'ПТС': 'pts',
@@ -178,6 +180,10 @@ app.get('/api/check-plate', async (req, res) => {
                                 for (const [ru, en] of Object.entries(ruToEnMap)) {
                                     if (name.startsWith(ru + '_')) {
                                         existingFiles[en].push(file.basename);
+                                        // ИЗМЕНЕНО: Записываем файлы ПЗ в отдельный массив
+                                        if (sub === 'Для ПЗ' && pzFilesMap[en] !== undefined) {
+                                            pzFilesMap[en].push(file.basename);
+                                        }
                                         break;
                                     }
                                 }
@@ -186,7 +192,7 @@ app.get('/api/check-plate', async (req, res) => {
                     });
                 }
             }
-            return res.json({ found: true, fullName: extractedName, existingFiles, hasDescription, folderName: folder.basename });
+            return res.json({ found: true, fullName: extractedName, existingFiles, pzFiles: pzFilesMap, hasDescription, folderName: folder.basename });
         }
         res.json({ found: false });
     } catch (error) { res.status(500).json({ error: error.message }); }
@@ -207,7 +213,7 @@ async function uploadFileWithRetry(path, buffer) {
 
 app.post('/api/upload', upload.any(), async (req, res) => {
     try {
-        const { step, folderName, clientType, docType, fullName, companyName, licensePlate, conversionType, updateDescription, copyDocsFromPZ } = req.body;
+        const { step, folderName, clientType, docType, fullName, companyName, licensePlate, conversionType, updateDescription } = req.body;
         
         let userEmail = "";
         const authHeader = req.headers.authorization;
@@ -254,7 +260,6 @@ app.post('/api/upload', upload.any(), async (req, res) => {
             return res.json({ success: true });
         }
 
-        // ИЗМЕНЕНО: Расширенная карта имен для загрузки файлов
         if (step === 'single_file') {
             const file = req.files[0];
             const russianNames = {
@@ -297,7 +302,6 @@ app.post('/api/upload', upload.any(), async (req, res) => {
             return res.json({ success: true });
         }
 
-        // ИЗМЕНЕНО: Логика копирования базовых файлов из ПЗ в ПБ
         if (step === 'doc_file') {
             if (updateDescription !== 'false' && docType === 'pz') {
                 const doc = new Document({sections: [{children: [new Paragraph({children: [new TextRun({text: "Тип переоборудования:", bold: true, size: 28})]}) , new Paragraph({children: [new TextRun({text: conversionType || "", size: 24})]})]}]});
@@ -305,17 +309,27 @@ app.post('/api/upload', upload.any(), async (req, res) => {
                 await uploadFileWithRetry(`${finalPath}/описание.docx`, docBuf);
             }
 
-            if (copyDocsFromPZ === 'true' && docType === 'pb') {
+            // ИЗМЕНЕНО: Точечное копирование файлов из ПЗ, выбранных пользователем
+            const filesToCopyStr = req.body.filesToCopy;
+            let filesToCopy = [];
+            if (filesToCopyStr) {
+                try { filesToCopy = JSON.parse(filesToCopyStr); } catch(e){}
+            }
+
+            if (filesToCopy.length > 0 && docType === 'pb') {
                 const pzPath = `/RegDoc_Заявки/${folderName}/Для ПЗ`;
                 if (await client.exists(pzPath)) {
                     const pzItems = await client.getDirectoryContents(pzPath);
+                    const ruToEnMapCopy = { 'ПАСПОРТ_': 'passport', 'СНИЛС_': 'snils', 'СТС_': 'sts', 'ПТС_': 'pts', 'ВЫПИСКА_ЕГРН_': 'egrn' };
                     for (const item of pzItems) {
                         if (item.type === 'file') {
                             const name = item.basename.toUpperCase();
-                            if (name.startsWith('ПАСПОРТ_') || name.startsWith('СНИЛС_') || name.startsWith('СТС_') || name.startsWith('ПТС_') || name.startsWith('ВЫПИСКА_ЕГРН_')) {
-                                const targetFile = `${finalPath}/${item.basename}`;
-                                if (await client.exists(targetFile) === false) {
-                                    await client.copyFile(item.filename, targetFile);
+                            for (const [ru, en] of Object.entries(ruToEnMapCopy)) {
+                                if (name.startsWith(ru) && filesToCopy.includes(en)) {
+                                    const targetFile = `${finalPath}/${item.basename}`;
+                                    if (await client.exists(targetFile) === false) {
+                                        await client.copyFile(item.filename, targetFile);
+                                    }
                                 }
                             }
                         }
