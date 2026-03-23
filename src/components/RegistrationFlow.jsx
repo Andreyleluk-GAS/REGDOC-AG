@@ -23,11 +23,7 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
 
   const [clientType, setClientType] = useState('individual');
   const [docType, setDocType] = useState('pz');
-  
-  // ИЗМЕНЕНО: Состояния для точечного копирования файлов из ПЗ
-  const [availablePzFiles, setAvailablePzFiles] = useState({});
-  const [selectedPzCopies, setSelectedPzCopies] = useState({});
-
+  const [copyDocsFromPZ, setCopyDocsFromPZ] = useState(false); 
   const [formData, setFormData] = useState({ fullName: '', companyName: '', licensePlate: '', conversionType: 'На транспортное средство предполагается установка комплекта газобаллонного оборудования для питания двигателя природным газом (пропан).' });
   
   const defaultFiles = {
@@ -108,7 +104,6 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
                     setActiveFolderName(data.folderName);
                     if (data.existingFiles) setExistingCloudFiles({...defaultFiles, ...data.existingFiles});
                     
-                    // ИЗМЕНЕНО: Обработка наличия файлов в ПЗ для тумблеров
                     if (data.pzFiles) {
                         setAvailablePzFiles({
                             passport: data.pzFiles.passport?.length > 0,
@@ -229,7 +224,6 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
       setFormData(prev => ({ ...prev, fullName: searchCache.fullName }));
       if (searchCache.existingFiles) setExistingCloudFiles({...defaultFiles, ...searchCache.existingFiles});
       
-      // ИЗМЕНЕНО: Обработка наличия файлов в ПЗ
       if (searchCache.pzFiles) {
           setAvailablePzFiles({
               passport: searchCache.pzFiles.passport?.length > 0,
@@ -339,7 +333,6 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
     data.append('docType', docType);
     data.append('conversionType', formData.conversionType);
     
-    // ИЗМЕНЕНО: Отправляем только те файлы, на которых стоит тумблер копирования
     const toCopy = Object.keys(selectedPzCopies).filter(k => selectedPzCopies[k]);
     data.append('filesToCopy', JSON.stringify(toCopy));
     
@@ -412,7 +405,6 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
       }
   };
 
-  // ИЗМЕНЕНО: Добавлены пропсы для тумблера копирования
   const renderUploadCard = (title, desc, category) => {
       const canCopy = docType === 'pb' && availablePzFiles[category];
       const isCopied = selectedPzCopies[category] || false;
@@ -692,7 +684,6 @@ function Input({ label, value, onChange, onInput, placeholder, isMono }) {
   );
 }
 
-// ИЗМЕНЕНО: Добавлены свойства canCopy, isCopied и функция onToggleCopy для визуализации тумблера
 function UploadCard({ title, desc, files, existing, onUpload, onRemove, fileStatuses, onSimulateUpload, canCopy, isCopied, onToggleCopy }) {
   return (
     <div className="border border-regdoc-grey rounded-2xl p-4 bg-regdoc-grey/35 h-full flex flex-col">
@@ -736,17 +727,18 @@ function UploadCard({ title, desc, files, existing, onUpload, onRemove, fileStat
                 <div key={i} className="bg-white border border-regdoc-cyan/25 p-2 rounded-xl text-[10px] flex flex-col gap-1.5 shadow-sm animate-in zoom-in-95 min-w-[140px] flex-1">
                     <div className="flex items-center justify-between gap-2">
                         <span className="truncate max-w-[100px] font-medium text-regdoc-navy">{f.name}</span>
-                        <div className="flex items-center gap-1 shrink-0">
+                        {/* ИЗМЕНЕНО: Кнопки раздвинуты (gap-3), увеличен паддинг, кнопка удаления с ярким фоном */}
+                        <div className="flex items-center gap-3 shrink-0">
                             {status.state === 'pending' && (
-                                <button onClick={() => onSimulateUpload(f)} className="text-white bg-regdoc-cyan hover:bg-regdoc-teal rounded-md p-0.5 transition-colors shadow-md" title="Загрузить на сервер">
-                                    <Check size={12} strokeWidth={4} />
+                                <button onClick={() => onSimulateUpload(f)} className="text-white bg-regdoc-cyan hover:bg-regdoc-teal rounded-lg p-1.5 transition-colors shadow-md" title="Загрузить на сервер">
+                                    <Check size={16} strokeWidth={4} />
                                 </button>
                             )}
                             {status.state === 'done' && (
-                                <CheckCircle2 size={14} className="text-regdoc-cyan" />
+                                <CheckCircle2 size={18} className="text-regdoc-cyan" />
                             )}
                             {status.state !== 'done' && status.state !== 'uploading' && (
-                                <button onClick={() => onRemove(i)} className="text-red-400 hover:text-red-600 font-bold p-1 transition-colors" title="Удалить">✕</button>
+                                <button onClick={() => onRemove(i)} className="text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 font-black p-1.5 px-2.5 rounded-lg transition-colors text-sm shadow-sm" title="Удалить">✕</button>
                             )}
                         </div>
                     </div>
