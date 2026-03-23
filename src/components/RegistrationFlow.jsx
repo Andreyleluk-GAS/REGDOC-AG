@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Check, ChevronRight, User, Briefcase, FileSignature, FileCheck2, Camera, Paperclip, Loader2, FileText, CheckCircle2, RotateCw, History, PlusCircle, AlertCircle, Info, XCircle } from 'lucide-react';
 import imageCompression from 'browser-image-compression';
-import { authFetch, getToken } from '../lib/api.js';
+import { authFetch } from '../lib/api.js';
 
 export default function RegistrationFlow({ editingRequest, onComplete }) {
   const [currentStep, setCurrentStep] = useState(1);
@@ -23,7 +23,10 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
 
   const [clientType, setClientType] = useState('individual');
   const [docType, setDocType] = useState('pz');
-  const [copyDocsFromPZ, setCopyDocsFromPZ] = useState(false); 
+  
+  const [availablePzFiles, setAvailablePzFiles] = useState({});
+  const [selectedPzCopies, setSelectedPzCopies] = useState({});
+
   const [formData, setFormData] = useState({ fullName: '', companyName: '', licensePlate: '', conversionType: 'На транспортное средство предполагается установка комплекта газобаллонного оборудования для питания двигателя природным газом (пропан).' });
   
   const defaultFiles = {
@@ -53,10 +56,7 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
           const data = new FormData();
           data.append('step', 'sync_request');
           data.append('folderName', activeFolderName);
-          const authTok = getToken();
-          if (authTok) {
-              fetch('/api/upload', { method: 'POST', headers: { 'Authorization': `Bearer ${authTok}` }, body: data, keepalive: true }).catch(() => {});
-          }
+          authFetch('/api/upload', { method: 'POST', body: data, keepalive: true }).catch(() => {});
       }
   };
 
@@ -96,41 +96,46 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
         setDocType(editingRequest.targetDocType || 'pz');
         setIsNewApplication(false);
 
-        setIsSearching(true);
-        authFetch(`/api/check-plate?plate=${encodeURIComponent(editingRequest.car_number)}`)
-            .then(res => res.json())
-            .then(data => {
-                if (data.found) {
-                    setActiveFolderName(data.folderName);
-                    if (data.existingFiles) setExistingCloudFiles({...defaultFiles, ...data.existingFiles});
-                    
-                    if (data.pzFiles) {
-                        setAvailablePzFiles({
-                            passport: data.pzFiles.passport?.length > 0,
-                            snils: data.pzFiles.snils?.length > 0,
-                            sts: data.pzFiles.sts?.length > 0,
-                            pts: data.pzFiles.pts?.length > 0,
-                            egrn: data.pzFiles.egrn?.length > 0,
-                        });
-                    }
+        if (editingRequest.car_number) {
+            setIsSearching(true);
+            authFetch(`/api/check-plate?plate=${encodeURIComponent(editingRequest.car_number)}`)
+                .then(res => {
+                    if (!res.ok) throw new Error('Ошибка сервера');
+                    return res.json();
+                })
+                .then(data => {
+                    if (data.found) {
+                        setActiveFolderName(data.folderName);
+                        if (data.existingFiles) setExistingCloudFiles({...defaultFiles, ...data.existingFiles});
+                        
+                        if (data.pzFiles) {
+                            setAvailablePzFiles({
+                                passport: data.pzFiles.passport?.length > 0,
+                                snils: data.pzFiles.snils?.length > 0,
+                                sts: data.pzFiles.sts?.length > 0,
+                                pts: data.pzFiles.pts?.length > 0,
+                                egrn: data.pzFiles.egrn?.length > 0,
+                            });
+                        }
 
-                    if (data.hasDescription) {
-                        setHasExistingDescription(true);
-                        setIsDescriptionEditable(false);
+                        if (data.hasDescription) {
+                            setHasExistingDescription(true);
+                            setIsDescriptionEditable(false);
+                        }
+                        setCurrentStep(editingRequest.forcedStep || 3);
+                    } else {
+                        showAlert("Ошибка", "Папка заявки не найдена на сервере.", "error");
+                        setCurrentStep(1);
                     }
-                    setCurrentStep(editingRequest.forcedStep || 3);
-                } else {
-                    showAlert("Ошибка", "Папка заявки не найдена на сервере.", "error");
+                })
+                .catch(e => {
+                    showAlert("Ошибка связи", "Не удалось загрузить данные заявки. Проверьте интернет-соединение.", "error");
                     setCurrentStep(1);
-                }
-            })
-            .catch(e => {
-                showAlert("Ошибка связи", "Не удалось загрузить данные заявки.", "error");
-                setCurrentStep(1);
-            })
-            .finally(() => {
-                setIsSearching(false);
-            });
+                })
+                .finally(() => {
+                    setIsSearching(false);
+                });
+        }
     } else {
         setCurrentStep(1);
         setIsNewApplication(true);
@@ -155,7 +160,9 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
 
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/api/upload', true);
-      const authTok = getToken();
+      
+      let authTok = '';
+      try { authTok = localStorage.getItem('token') || localStorage.getItem('regdoc_token') || ''; } catch(e){}
       if (authTok) xhr.setRequestHeader('Authorization', `Bearer ${authTok}`);
       
       xhr.upload.onprogress = (event) => {
@@ -727,18 +734,18 @@ function UploadCard({ title, desc, files, existing, onUpload, onRemove, fileStat
                 <div key={i} className="bg-white border border-regdoc-cyan/25 p-2 rounded-xl text-[10px] flex flex-col gap-1.5 shadow-sm animate-in zoom-in-95 min-w-[140px] flex-1">
                     <div className="flex items-center justify-between gap-2">
                         <span className="truncate max-w-[100px] font-medium text-regdoc-navy">{f.name}</span>
-                        {/* ИЗМЕНЕНО: Кнопки раздвинуты (gap-3), увеличен паддинг, кнопка удаления с ярким фоном */}
-                        <div className="flex items-center gap-3 shrink-0">
+                        {/* ИЗМЕНЕНО: Крупные кнопки, раздвинуты по горизонтали */}
+                        <div className="flex items-center gap-4 sm:gap-5 shrink-0 ml-3">
                             {status.state === 'pending' && (
-                                <button onClick={() => onSimulateUpload(f)} className="text-white bg-regdoc-cyan hover:bg-regdoc-teal rounded-lg p-1.5 transition-colors shadow-md" title="Загрузить на сервер">
-                                    <Check size={16} strokeWidth={4} />
+                                <button onClick={() => onSimulateUpload(f)} className="text-white bg-regdoc-cyan hover:bg-regdoc-teal rounded-xl p-2.5 sm:p-3 transition-all shadow-md active:scale-95" title="Загрузить на сервер">
+                                    <Check size={20} strokeWidth={4} />
                                 </button>
                             )}
                             {status.state === 'done' && (
-                                <CheckCircle2 size={18} className="text-regdoc-cyan" />
+                                <CheckCircle2 size={24} className="text-regdoc-cyan" />
                             )}
                             {status.state !== 'done' && status.state !== 'uploading' && (
-                                <button onClick={() => onRemove(i)} className="text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 font-black p-1.5 px-2.5 rounded-lg transition-colors text-sm shadow-sm" title="Удалить">✕</button>
+                                <button onClick={() => onRemove(i)} className="text-red-500 hover:text-white bg-red-50 hover:bg-red-500 font-black p-2.5 px-4 sm:p-3 sm:px-5 rounded-xl transition-all text-base shadow-sm active:scale-95" title="Удалить">✕</button>
                             )}
                         </div>
                     </div>
