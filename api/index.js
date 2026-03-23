@@ -16,15 +16,57 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, service: 'regdoc-api' });
 });
 
-// Получение списка заявок текущего пользователя
+// ИЗМЕНЕНО: Добавлена обязательная предварительная проверка наличия папок перед выдачей списка заявок
 app.get('/api/my-requests', async (req, res) => {
     try {
         const authHeader = req.headers.authorization;
         if (!authHeader || !authHeader.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' });
         const token = authHeader.split(' ')[1];
         const decoded = jwt.verify(token, process.env.JWT_SECRET || 'dev-only-change-JWT_SECRET-in-env');
+        const userEmail = decoded.email.toLowerCase();
+
         const allRequests = await loadRequests();
-        res.json(allRequests.filter(r => String(r.email).toLowerCase() === decoded.email.toLowerCase()));
+        const userReqs = allRequests.filter(r => String(r.email).toLowerCase() === userEmail);
+        
+        const updates = [];
+        for (let r of userReqs) {
+            const dateParts = String(r.DATE).split('.');
+            if (dateParts.length === 3) {
+                const fName = String(r.full_name || '').trim().replace(/\s+/g, '_');
+                const fPlate = normalizePlate(String(r.car_number || ''));
+                const folderName = `[${dateParts[2]}.${dateParts[1]}.${dateParts[0]}][${fName}][${fPlate}]`;
+                
+                const pzExists = await client.exists(`/RegDoc_Заявки/${folderName}/Для ПЗ`);
+                const pbExists = await client.exists(`/RegDoc_Заявки/${folderName}/Для ПБ`);
+                
+                const pzStatus = pzExists ? 'yes' : 'no';
+                const pbStatus = pbExists ? 'yes' : 'no';
+                
+                if (r.type_PZ !== pzStatus || r.type_PB !== pbStatus) {
+                    r.type_PZ = pzStatus;
+                    r.type_PB = pbStatus;
+                    updates.push(r);
+                }
+            }
+        }
+
+        if (updates.length > 0) {
+            await withRequestsLock(async (requestsToUpdate) => {
+                for (let u of updates) {
+                    const idx = requestsToUpdate.findIndex(mainR => 
+                        normalizePlate(String(mainR.car_number || '')) === normalizePlate(String(u.car_number || '')) && 
+                        mainR.DATE === u.DATE && 
+                        String(mainR.email || '').toLowerCase() === userEmail
+                    );
+                    if (idx > -1) {
+                        requestsToUpdate[idx].type_PZ = u.type_PZ;
+                        requestsToUpdate[idx].type_PB = u.type_PB;
+                    }
+                }
+            });
+        }
+
+        res.json(userReqs);
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
@@ -40,9 +82,7 @@ const normalizePlate = (plate) => {
     return plate.toUpperCase().replace(/[ABEKMHOPCTYX]/g, char => map[char] || char).replace(/[^А-ЯЁ0-9]/g, '');
 };
 
-// НОВАЯ ФУНКЦИЯ: Синхронизация записи в реестре на основе папок сервера
 async function syncRequestRecord(folderName, email) {
-    // Извлекаем данные из [YYYY.MM.DD][Name][Plate]
     const match = folderName.match(/\[(\d{4})\.(\d{2})\.(\d{2})\]\[(.*?)\]\[(.*?)\]/);
     if (!match) return;
 
@@ -59,7 +99,6 @@ async function syncRequestRecord(folderName, email) {
             String(r.email || '').toLowerCase() === userEmail
         );
 
-        // Проверяем физическое наличие папок услуг
         const pzExists = await client.exists(`/RegDoc_Заявки/${folderName}/Для ПЗ`);
         const pbExists = await client.exists(`/RegDoc_Заявки/${folderName}/Для ПБ`);
 
@@ -144,7 +183,6 @@ app.post('/api/upload', upload.any(), async (req, res) => {
     try {
         const { step, folderName, clientType, docType, fullName, companyName, licensePlate, conversionType, updateDescription } = req.body;
         
-        // Получаем email из токена для синхронизации
         let userEmail = "";
         const authHeader = req.headers.authorization;
         if (authHeader && authHeader.startsWith('Bearer ')) {
@@ -152,7 +190,12 @@ app.post('/api/upload', upload.any(), async (req, res) => {
             userEmail = decoded.email;
         }
 
-        // ШАГ 1: Создание корневой папки клиента + Первая запись в реестр
+        // ИЗМЕНЕНО: Добавлен шаг принудительной фоновой синхронизации
+        if (step === 'sync_request') {
+            if (userEmail && folderName) await syncRequestRecord(folderName, userEmail);
+            return res.json({ success: true });
+        }
+
         if (step === 'main_folder') {
             const now = new Date();
             const ekb = new Intl.DateTimeFormat('ru-RU', {timeZone: 'Asia/Yekaterinburg', year:'numeric', month:'2-digit', day:'2-digit'}).formatToParts(now);
@@ -180,14 +223,12 @@ app.post('/api/upload', upload.any(), async (req, res) => {
             return res.json({ success: true });
         }
 
-        // ШАГ 2: Создание подпапки услуги + Обновление реестра (type_PZ/PB на 'yes')
         if (step === 'sub_folder') {
             await createDirWithRetry(finalPath);
             if (userEmail) await syncRequestRecord(folderName, userEmail);
             return res.json({ success: true });
         }
 
-        // ШАГ 3: Загрузка файла + Постоянная проверка реестра
         if (step === 'single_file') {
             const file = req.files[0];
             const russianNames = { 'passport': 'ПАСПОРТ', 'snils': 'СНИЛС', 'sts': 'СТС', 'pts': 'ПТС' };
@@ -218,7 +259,6 @@ app.post('/api/upload', upload.any(), async (req, res) => {
             return res.json({ success: true });
         }
 
-        // ШАГ 4: Загрузка описания + Финальная проверка реестра
         if (step === 'doc_file') {
             if (updateDescription !== 'false') {
                 const doc = new Document({sections: [{children: [new Paragraph({children: [new TextRun({text: "Тип переоборудования:", bold: true, size: 28})]}) , new Paragraph({children: [new TextRun({text: conversionType || "", size: 24})]})]}]});

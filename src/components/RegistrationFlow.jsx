@@ -11,7 +11,6 @@ const steps = [
   { id: 5, title: 'Описание' },
 ];
 
-// ИЗМЕНЕНО: Добавлен пропс editingRequest
 export default function RegistrationFlow({ editingRequest }) {
   const [currentStep, setCurrentStep] = useState(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -38,8 +37,28 @@ export default function RegistrationFlow({ editingRequest }) {
   const [existingCloudFiles, setExistingCloudFiles] = useState({ passport: [], snils: [], sts: [], pts: [] });
   const [fileStatuses, setFileStatuses] = useState({});
 
+  // ИЗМЕНЕНО: Добавлена функция фоновой проверки и синхронизации папок
+  const triggerSync = () => {
+      if (activeFolderName) {
+          const data = new FormData();
+          data.append('step', 'sync_request');
+          data.append('folderName', activeFolderName);
+          const authTok = getToken();
+          if (authTok) {
+              fetch('/api/upload', {
+                  method: 'POST',
+                  headers: { 'Authorization': `Bearer ${authTok}` },
+                  body: data,
+                  keepalive: true
+              }).catch(() => {});
+          }
+      }
+  };
+
+  // ИЗМЕНЕНО: Синхронизация при закрытии окна или уходе со страницы
   useEffect(() => {
     const handleBeforeUnload = (e) => {
+        triggerSync();
         if (currentStep > 2 && currentStep < 6 && !showSuccess && isNewApplication) {
             e.preventDefault();
             e.returnValue = 'Заявка не завершена. Данные могут быть утеряны.';
@@ -47,14 +66,16 @@ export default function RegistrationFlow({ editingRequest }) {
         }
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [currentStep, showSuccess, isNewApplication]);
+    return () => {
+        window.removeEventListener('beforeunload', handleBeforeUnload);
+        triggerSync(); // Срабатывает при выходе к списку заявок (размонтирование)
+    };
+  }, [currentStep, showSuccess, isNewApplication, activeFolderName]);
 
   const showAlert = (title, message, type = 'info') => {
     setModal({ show: true, title, message, type });
   };
 
-  // ИЗМЕНЕНО: Эффект для автоматической загрузки данных при редактировании заявки
   useEffect(() => {
     if (editingRequest) {
         setFormData(prev => ({
@@ -65,7 +86,6 @@ export default function RegistrationFlow({ editingRequest }) {
         setDocType(editingRequest.targetDocType || 'pz');
         setIsNewApplication(false);
 
-        // Ищем папку на сервере, чтобы получить её точное имя и загруженные файлы
         setIsSearching(true);
         authFetch(`/api/check-plate?plate=${encodeURIComponent(editingRequest.car_number)}`)
             .then(res => res.json())
@@ -91,7 +111,6 @@ export default function RegistrationFlow({ editingRequest }) {
                 setIsSearching(false);
             });
     } else {
-        // Сброс, если создается новая заявка
         setCurrentStep(1);
         setIsNewApplication(true);
         setActiveFolderName('');
@@ -278,7 +297,6 @@ export default function RegistrationFlow({ editingRequest }) {
     data.append('docType', docType);
     data.append('conversionType', formData.conversionType);
     
-    // Описание создается только если это ПЗ и кнопка "Изменить" нажата (или заявка новая)
     const isPz = docType === 'pz';
     const needsDescription = isPz && (!hasExistingDescription || isDescriptionEditable);
     data.append('updateDescription', needsDescription.toString());
@@ -296,6 +314,7 @@ export default function RegistrationFlow({ editingRequest }) {
   const isAnyFilePending = Object.values(fileStatuses).some(status => status.state === 'pending');
 
   const handleNextStep = async () => {
+      triggerSync(); // ИЗМЕНЕНО: Выполняется проверка папок при нажатии Далее
       if (currentStep === 1) { setCurrentStep(2); return; }
       
       if (currentStep === 2) {
@@ -504,6 +523,7 @@ export default function RegistrationFlow({ editingRequest }) {
           <div className="flex gap-3">
             {currentStep > 1 && currentStep < 5 && (
               <button onClick={() => {
+                  triggerSync(); // ИЗМЕНЕНО: Выполняется проверка папок при нажатии Назад
                   if (currentStep === 4 && isAnyFileUploading) {
                       return showAlert("Загрузка файлов", "Пожалуйста, дождитесь окончания загрузки файлов перед переходом на другой этап.", "info");
                   }
@@ -512,7 +532,7 @@ export default function RegistrationFlow({ editingRequest }) {
             )}
 
             {currentStep === 5 && (
-              <button onClick={() => setCurrentStep(prev => prev - 1)} className="px-6 py-4 rounded-2xl border border-regdoc-grey font-bold text-regdoc-navy/50 hover:bg-regdoc-grey/40 transition-all">Назад</button>
+              <button onClick={() => { triggerSync(); setCurrentStep(prev => prev - 1); }} className="px-6 py-4 rounded-2xl border border-regdoc-grey font-bold text-regdoc-navy/50 hover:bg-regdoc-grey/40 transition-all">Назад</button>
             )}
 
             <button onClick={handleNextStep} disabled={isSubmitting} className="flex-1 py-4 bg-regdoc-cyan text-white font-bold rounded-2xl shadow-lg shadow-regdoc-navy/10 hover:bg-regdoc-teal transition-colors flex items-center justify-center disabled:opacity-60">
