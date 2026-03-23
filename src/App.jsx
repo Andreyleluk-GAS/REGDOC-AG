@@ -4,11 +4,10 @@ import RegdocLogo from './components/RegdocLogo';
 import RegdocIcon from './components/RegdocIcon';
 import LandingPage from './components/LandingPage';
 import EmailAuthForm from './components/EmailAuthForm';
-import { ShieldCheck, Loader2, FileText, CheckCircle2, AlertTriangle } from 'lucide-react'; // Изменено: Calendar удален, AlertTriangle добавлен
+import { ShieldCheck, Loader2, FileText, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { useAuth } from './context/AuthContext.jsx';
 import { authFetch } from './lib/api.js';
 
-// Изменено: Функция форматирования номера
 const formatPlate = (plate) => {
   if (!plate) return '';
   const clean = plate.replace(/[^А-ЯЁA-Z0-9]/gi, '').toUpperCase();
@@ -25,20 +24,23 @@ function App() {
   
   const [requests, setRequests] = useState([]);
   const [loadingReqs, setLoadingReqs] = useState(false);
-  const [editingRequest, setEditingRequest] = useState(null); // Изменено: Состояние для редактируемой заявки
-  const [workAlert, setWorkAlert] = useState(false); // Изменено: Состояние для алерта "Документы в работе"
+  const [editingRequest, setEditingRequest] = useState(null);
+  const [workAlert, setWorkAlert] = useState(false);
 
   const cta = useMemo(
     () => ({
-      onRegister: () => { setEditingRequest(null); setScreen('register'); }, // Изменено
-      onEditRequest: (req, docType) => { setEditingRequest({...req, targetDocType: docType}); setScreen('register'); }, // Изменено: Переход к дозагрузке
+      onRegister: () => { setEditingRequest(null); setScreen('register'); },
+      // Изменено: добавлен параметр step для открытия конкретного этапа
+      onEditRequest: (req, docType, step = 4) => { 
+        setEditingRequest({...req, targetDocType: docType, forcedStep: step}); 
+        setScreen('register'); 
+      },
       onCabinet: () => setScreen('cabinet'),
-      onHome: () => { setEditingRequest(null); setScreen('landing'); }, // Изменено
+      onHome: () => { setEditingRequest(null); setScreen('landing'); },
     }),
     [],
   );
 
-  // Изменено: Локальный компонент для плашек статуса
   const StatusBadge = ({ label, isGreen, onClick, tooltip }) => (
     <button
       onClick={onClick}
@@ -97,7 +99,8 @@ function App() {
                   Выйти
                 </button>
               )}
-              {screen !== 'landing' && (
+              {/* Изменено: кнопка "На главную" скрыта, если открыт кабинет (список заявок) */}
+              {screen !== 'landing' && screen !== 'cabinet' && (
                 <button
                   type="button"
                   onClick={cta.onHome}
@@ -161,46 +164,51 @@ function App() {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {/* Изменено: Новый макет элемента списка заявок */}
                   {requests.map((req, idx) => {
                     const isPZ_Submitted = req.type_PZ === 'yes';
                     const isPB_Submitted = req.type_PB === 'yes';
-                    const isPZ_Ready = false; // Forced Red для текущей задачи
-                    const isPB_Ready = false; // Forced Red для текущей задачи
+                    const isPZ_Ready = false; 
+                    const isPB_Ready = false; 
 
                     return (
                       <div key={idx} className="p-4 rounded-2xl border border-regdoc-grey bg-regdoc-grey/20">
                         <div className="flex justify-between items-center gap-4">
-                          {/* Слева: Номер ТС и ФИО */}
                           <div className="shrink-0">
                             <div className="text-xl font-black text-regdoc-navy tracking-tight">{formatPlate(req.car_number)}</div>
                             <div className="text-[10px] font-bold text-regdoc-navy/40 uppercase">{req.full_name?.replace(/_/g, ' ')}</div>
                           </div>
 
-                          {/* Справа: Плашки статуса */}
-                          <div className="flex gap-2 flex-wrap justify-end">
-                            <StatusBadge
-                              label="Документы для ПЗ"
-                              isGreen={isPZ_Submitted}
-                              onClick={() => cta.onEditRequest(req, 'pz')}
-                              tooltip={!isPZ_Submitted ? "Не хватает документов" : undefined}
-                            />
-                            <StatusBadge
-                              label="ПЗ: готово"
-                              isGreen={isPZ_Ready}
-                              onClick={() => !isPZ_Ready ? setWorkAlert(true) : null}
-                            />
-                            <StatusBadge
-                              label="Документы для ПБ"
-                              isGreen={isPB_Submitted}
-                              onClick={() => cta.onEditRequest(req, 'pb')}
-                              tooltip={!isPB_Submitted ? "Не хватает документов" : undefined}
-                            />
-                            <StatusBadge
-                              label="ПБ: готово"
-                              isGreen={isPB_Ready}
-                              onClick={() => !isPB_Ready ? setWorkAlert(true) : null}
-                            />
+                          {/* Изменено: Кнопки компактно в две строки */}
+                          <div className="flex flex-col gap-2 items-end">
+                            {/* Первая строка: ПЗ */}
+                            <div className="flex gap-2">
+                              <StatusBadge
+                                label="Документы для ПЗ"
+                                isGreen={isPZ_Submitted}
+                                onClick={() => cta.onEditRequest(req, 'pz', 4)}
+                                tooltip={!isPZ_Submitted ? "Не хватает документов" : undefined}
+                              />
+                              <StatusBadge
+                                label="ПЗ: готово"
+                                isGreen={isPZ_Ready}
+                                onClick={() => !isPZ_Ready ? setWorkAlert(true) : null}
+                              />
+                            </div>
+                            {/* Вторая строка: ПБ */}
+                            <div className="flex gap-2">
+                              <StatusBadge
+                                label="Документы для ПБ"
+                                isGreen={isPB_Submitted}
+                                // Изменено: при нажатии открывается этап 4
+                                onClick={() => cta.onEditRequest(req, 'pb', 4)}
+                                tooltip={!isPB_Submitted ? "Не хватает документов" : undefined}
+                              />
+                              <StatusBadge
+                                label="ПБ: готово"
+                                isGreen={isPB_Ready}
+                                onClick={() => !isPB_Ready ? setWorkAlert(true) : null}
+                              />
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -209,7 +217,6 @@ function App() {
                 </div>
               )}
 
-              {/* Изменено: Алерт "Документы в работе" */}
               {workAlert && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
                   <div className="bg-white rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl border border-regdoc-grey">
@@ -237,7 +244,7 @@ function App() {
                 </div>
               </div>
             </div>
-            <RegistrationFlow editingRequest={editingRequest} /> {/* Изменено: Передача редактируемой заявки */}
+            <RegistrationFlow editingRequest={editingRequest} />
           </main>
         )}
 
