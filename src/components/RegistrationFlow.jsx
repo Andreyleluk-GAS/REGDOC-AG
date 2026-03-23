@@ -11,7 +11,8 @@ const steps = [
   { id: 5, title: 'Описание' },
 ];
 
-export default function RegistrationFlow() {
+// ИЗМЕНЕНО: Добавлен пропс editingRequest
+export default function RegistrationFlow({ editingRequest }) {
   const [currentStep, setCurrentStep] = useState(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isCompressing, setIsCompressing] = useState(false);
@@ -48,6 +49,57 @@ export default function RegistrationFlow() {
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [currentStep, showSuccess, isNewApplication]);
+
+  const showAlert = (title, message, type = 'info') => {
+    setModal({ show: true, title, message, type });
+  };
+
+  // ИЗМЕНЕНО: Эффект для автоматической загрузки данных при редактировании заявки
+  useEffect(() => {
+    if (editingRequest) {
+        setFormData(prev => ({
+            ...prev,
+            licensePlate: editingRequest.car_number || '',
+            fullName: (editingRequest.full_name || '').replace(/_/g, ' ')
+        }));
+        setDocType(editingRequest.targetDocType || 'pz');
+        setIsNewApplication(false);
+
+        // Ищем папку на сервере, чтобы получить её точное имя и загруженные файлы
+        setIsSearching(true);
+        authFetch(`/api/check-plate?plate=${encodeURIComponent(editingRequest.car_number)}`)
+            .then(res => res.json())
+            .then(data => {
+                if (data.found) {
+                    setActiveFolderName(data.folderName);
+                    if (data.existingFiles) setExistingCloudFiles(data.existingFiles);
+                    if (data.hasDescription) {
+                        setHasExistingDescription(true);
+                        setIsDescriptionEditable(false);
+                    }
+                    setCurrentStep(editingRequest.forcedStep || 3);
+                } else {
+                    showAlert("Ошибка", "Папка заявки не найдена на сервере.", "error");
+                    setCurrentStep(1);
+                }
+            })
+            .catch(e => {
+                showAlert("Ошибка связи", "Не удалось загрузить данные заявки.", "error");
+                setCurrentStep(1);
+            })
+            .finally(() => {
+                setIsSearching(false);
+            });
+    } else {
+        // Сброс, если создается новая заявка
+        setCurrentStep(1);
+        setIsNewApplication(true);
+        setActiveFolderName('');
+        setFormData({ fullName: '', companyName: '', licensePlate: '', conversionType: 'На транспортное средство предполагается установка комплекта газобаллонного оборудования для питания двигателя природным газом (пропан).' });
+        setFiles({ passport: [], snils: [], sts: [], pts: [] });
+        setExistingCloudFiles({ passport: [], snils: [], sts: [], pts: [] });
+    }
+  }, [editingRequest]);
 
   const handleRealUpload = (file, category, index) => {
       const key = file.name + file.size;
@@ -97,10 +149,6 @@ export default function RegistrationFlow() {
           try { await authFetch('/api/upload', { method: 'POST', body: data }); } catch(e) {}
       }
       window.location.reload(); 
-  };
-
-  const showAlert = (title, message, type = 'info') => {
-    setModal({ show: true, title, message, type });
   };
 
   const validateFullName = (name) => {
@@ -230,7 +278,7 @@ export default function RegistrationFlow() {
     data.append('docType', docType);
     data.append('conversionType', formData.conversionType);
     
-    // ИЗМЕНЕНО: Описание создается только если это ПЗ и кнопка "Изменить" нажата (или заявка новая)
+    // Описание создается только если это ПЗ и кнопка "Изменить" нажата (или заявка новая)
     const isPz = docType === 'pz';
     const needsDescription = isPz && (!hasExistingDescription || isDescriptionEditable);
     data.append('updateDescription', needsDescription.toString());
@@ -329,7 +377,7 @@ export default function RegistrationFlow() {
           <div className="bg-white rounded-[40px] p-8 w-full max-w-md shadow-2xl text-center">
             <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4"><XCircle size={32} /></div>
             <h3 className="text-xl font-bold text-regdoc-navy mb-2">Отменить заявку?</h3>
-            <p className="text-regdoc-navy/55 text-sm mb-8">Вы хотите завершить отправку (сохранить загруженные файлы) или отменить и полностью удалить всю папку с сервера?</p>
+            <p className="text-regdoc-navy/55 text-sm mb-8">Вы хотите завершить отправку (сохранить загруженные файлов) или отменить и полностью удалить всю папку с сервера?</p>
             <div className="space-y-3">
                 <button onClick={() => setShowExitPrompt(false)} className="w-full py-4 bg-regdoc-cyan text-white font-bold rounded-2xl hover:bg-regdoc-teal transition-all">Завершить отправку</button>
                 <button onClick={() => setShowExitPrompt(false)} className="w-full py-4 bg-regdoc-grey text-regdoc-navy/65 font-bold rounded-2xl hover:bg-regdoc-grey/80 transition-all">Назад</button>
