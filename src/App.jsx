@@ -1,31 +1,55 @@
-import React, { useMemo, useState, useEffect } from 'react'; // Изменено: добавлен useEffect
+import React, { useMemo, useState, useEffect } from 'react';
 import RegistrationFlow from './components/RegistrationFlow';
 import RegdocLogo from './components/RegdocLogo';
 import RegdocIcon from './components/RegdocIcon';
 import LandingPage from './components/LandingPage';
 import EmailAuthForm from './components/EmailAuthForm';
-import { ShieldCheck, Loader2, FileText, Calendar, CheckCircle2 } from 'lucide-react'; // Изменено: новые иконки
+import { ShieldCheck, Loader2, FileText, CheckCircle2, AlertTriangle } from 'lucide-react'; // Изменено: Calendar удален, AlertTriangle добавлен
 import { useAuth } from './context/AuthContext.jsx';
-import { authFetch } from './lib/api.js'; // НОВОЕ
+import { authFetch } from './lib/api.js';
+
+// Изменено: Функция форматирования номера
+const formatPlate = (plate) => {
+  if (!plate) return '';
+  const clean = plate.replace(/[^А-ЯЁA-Z0-9]/gi, '').toUpperCase();
+  const match = clean.match(/^([А-ЯЁA-Z])(\d{3})([А-ЯЁA-Z]{2})(\d{2,3})$/i);
+  if (match) {
+    return `${match[1]} ${match[2]} ${match[3]} / ${match[4]}`;
+  }
+  return plate;
+};
 
 function App() {
   const { user, booting, banner, clearBanner, logout } = useAuth();
   const [screen, setScreen] = useState('landing'); // 'landing' | 'register' | 'cabinet'
   
-  // НОВОЕ: Состояние для списка заявок
   const [requests, setRequests] = useState([]);
   const [loadingReqs, setLoadingReqs] = useState(false);
+  const [editingRequest, setEditingRequest] = useState(null); // Изменено: Состояние для редактируемой заявки
+  const [workAlert, setWorkAlert] = useState(false); // Изменено: Состояние для алерта "Документы в работе"
 
   const cta = useMemo(
     () => ({
-      onRegister: () => setScreen('register'),
+      onRegister: () => { setEditingRequest(null); setScreen('register'); }, // Изменено
+      onEditRequest: (req, docType) => { setEditingRequest({...req, targetDocType: docType}); setScreen('register'); }, // Изменено: Переход к дозагрузке
       onCabinet: () => setScreen('cabinet'),
-      onHome: () => setScreen('landing'),
+      onHome: () => { setEditingRequest(null); setScreen('landing'); }, // Изменено
     }),
     [],
   );
 
-  // НОВОЕ: Загрузка заявок при переходе в кабинет
+  // Изменено: Локальный компонент для плашек статуса
+  const StatusBadge = ({ label, isGreen, onClick, tooltip }) => (
+    <button
+      onClick={onClick}
+      title={tooltip}
+      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wider border transition-all ${isGreen ? 'bg-regdoc-mist border-regdoc-cyan/30 text-regdoc-teal hover:border-regdoc-cyan' : 'border-gray-200 text-red-500 bg-red-50 hover:border-red-300'}`}
+    >
+      <CheckCircle2 size={12} className={isGreen ? 'text-regdoc-cyan' : 'text-red-400'} />
+      {label}
+    </button>
+  );
+
   useEffect(() => {
     if (screen === 'cabinet' && user) {
       setLoadingReqs(true);
@@ -137,27 +161,68 @@ function App() {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {requests.map((req, idx) => (
-                    <div key={idx} className="p-4 rounded-2xl border border-regdoc-grey bg-regdoc-grey/20 hover:border-regdoc-cyan/50 transition-all group">
-                      <div className="flex justify-between items-start mb-3">
-                        <div>
-                          <div className="text-lg font-black text-regdoc-navy tracking-tight">{req.car_number}</div>
-                          <div className="text-[10px] font-bold text-regdoc-navy/40 uppercase">{req.full_name?.replace(/_/g, ' ')}</div>
-                        </div>
-                        <div className="flex items-center gap-1.5 text-[10px] font-bold text-regdoc-navy/30 bg-white px-2 py-1 rounded-lg border border-regdoc-grey">
-                          <Calendar size={12} /> {req.DATE}
+                  {/* Изменено: Новый макет элемента списка заявок */}
+                  {requests.map((req, idx) => {
+                    const isPZ_Submitted = req.type_PZ === 'yes';
+                    const isPB_Submitted = req.type_PB === 'yes';
+                    const isPZ_Ready = false; // Forced Red для текущей задачи
+                    const isPB_Ready = false; // Forced Red для текущей задачи
+
+                    return (
+                      <div key={idx} className="p-4 rounded-2xl border border-regdoc-grey bg-regdoc-grey/20">
+                        <div className="flex justify-between items-center gap-4">
+                          {/* Слева: Номер ТС и ФИО */}
+                          <div className="shrink-0">
+                            <div className="text-xl font-black text-regdoc-navy tracking-tight">{formatPlate(req.car_number)}</div>
+                            <div className="text-[10px] font-bold text-regdoc-navy/40 uppercase">{req.full_name?.replace(/_/g, ' ')}</div>
+                          </div>
+
+                          {/* Справа: Плашки статуса */}
+                          <div className="flex gap-2 flex-wrap justify-end">
+                            <StatusBadge
+                              label="Документы для ПЗ"
+                              isGreen={isPZ_Submitted}
+                              onClick={() => cta.onEditRequest(req, 'pz')}
+                              tooltip={!isPZ_Submitted ? "Не хватает документов" : undefined}
+                            />
+                            <StatusBadge
+                              label="ПЗ: готово"
+                              isGreen={isPZ_Ready}
+                              onClick={() => !isPZ_Ready ? setWorkAlert(true) : null}
+                            />
+                            <StatusBadge
+                              label="Документы для ПБ"
+                              isGreen={isPB_Submitted}
+                              onClick={() => cta.onEditRequest(req, 'pb')}
+                              tooltip={!isPB_Submitted ? "Не хватает документов" : undefined}
+                            />
+                            <StatusBadge
+                              label="ПБ: готово"
+                              isGreen={isPB_Ready}
+                              onClick={() => !isPB_Ready ? setWorkAlert(true) : null}
+                            />
+                          </div>
                         </div>
                       </div>
-                      <div className="flex gap-2">
-                        <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wider border ${req.type_PZ === 'yes' ? 'bg-regdoc-mist border-regdoc-cyan/30 text-regdoc-teal' : 'bg-white border-regdoc-grey text-regdoc-navy/20'}`}>
-                          {req.type_PZ === 'yes' && <CheckCircle2 size={12} />} ПЗ: {req.type_PZ === 'yes' ? 'Готово' : 'Нет'}
-                        </div>
-                        <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wider border ${req.type_PB === 'yes' ? 'bg-regdoc-mist border-regdoc-cyan/30 text-regdoc-teal' : 'bg-white border-regdoc-grey text-regdoc-navy/20'}`}>
-                          {req.type_PB === 'yes' && <CheckCircle2 size={12} />} ПБ: {req.type_PB === 'yes' ? 'Готово' : 'Нет'}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Изменено: Алерт "Документы в работе" */}
+              {workAlert && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+                  <div className="bg-white rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl border border-regdoc-grey">
+                    <AlertTriangle className="w-16 h-16 text-amber-500 mx-auto mb-6" />
+                    <h3 className="text-xl font-bold text-regdoc-navy mb-3">Документы в работе</h3>
+                    <p className="text-sm text-regdoc-navy/70 mb-8">Ваша заявка находится в стадии обработки. Как только документы будут готовы, они появятся здесь.</p>
+                    <button
+                      onClick={() => setWorkAlert(false)}
+                      className="w-full py-3 bg-regdoc-navy text-white font-bold rounded-xl hover:bg-regdoc-teal transition-all"
+                    >
+                      Назад
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -172,7 +237,7 @@ function App() {
                 </div>
               </div>
             </div>
-            <RegistrationFlow />
+            <RegistrationFlow editingRequest={editingRequest} /> {/* Изменено: Передача редактируемой заявки */}
           </main>
         )}
 
