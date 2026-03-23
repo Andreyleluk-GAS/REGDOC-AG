@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "api": "node server.js",
+    "dev:all": "concurrently -n api,vite -c cyan,magenta \"npm run api\" \"npm run dev\"",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"
@@ -12,18 +14,22 @@
   "dependencies": {
     "@tailwindcss/vite": "^4.2.2",
     "@twa-dev/sdk": "^8.0.1",
+    "bcryptjs": "^3.0.2",
     "browser-image-compression": "^2.0.2",
     "cors": "^2.8.6",
     "docx": "^9.6.1",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.2",
     "lucide-react": "^0.577.0",
     "multer": "^2.1.1",
+    "nodemailer": "^7.0.3",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "webdav": "^5.9.0"
   },
   "devDependencies": {
+    "concurrently": "^9.2.1",
     "@eslint/js": "^9.39.4",
     "@tailwindcss/postcss": "^4.2.2",
     "@types/react": "^19.2.14",

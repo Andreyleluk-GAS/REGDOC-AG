@@ -1,14 +1,17 @@
+import 'dotenv/config';
 import express from 'express';
 import multer from 'multer';
 import cors from 'cors';
 import { createClient } from 'webdav';
-import dotenv from 'dotenv';
 import { Document, Packer, Paragraph, TextRun } from 'docx';
-
-dotenv.config();
+import authRouter from './authRouter.js';
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() }); 
 app.use(cors()); app.use(express.json());
+app.get('/api/health', (req, res) => {
+  res.json({ ok: true, service: 'regdoc-api' });
+});
+app.use('/api/auth', authRouter);
 
 const client = createClient("https://webdav.cloud.mail.ru/", {
     username: process.env.VK_CLOUD_EMAIL,

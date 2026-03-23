@@ -1,54 +1,118 @@
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 import RegistrationFlow from './components/RegistrationFlow';
-import { ShieldCheck } from 'lucide-react';
+import RegdocLogo from './components/RegdocLogo';
+import RegdocIcon from './components/RegdocIcon';
+import LandingPage from './components/LandingPage';
+import EmailAuthForm from './components/EmailAuthForm';
+import { ShieldCheck, Loader2 } from 'lucide-react';
+import { useAuth } from './context/AuthContext.jsx';
 
 function App() {
-  return (
-    <div className="min-h-screen bg-slate-100 p-4 sm:p-8 font-sans">
-      <div className="max-w-2xl mx-auto space-y-6">
-        
-        {/* Шапка с логотипом и версией (осталась без изменений) */}
-        <header className="flex justify-between items-center mb-2">
-          <div>
-            <h1 className="text-3xl font-black tracking-tighter text-slate-900 leading-none">
-              REG<span className="text-red-600">DOC</span>
-            </h1>
-            <p className="text-[10px] font-bold text-green-700 uppercase tracking-[0.1em] mt-1">
-              Automatic registration service
-            </p>
-          </div>
-          <div className="bg-slate-200/60 text-slate-500 px-3 py-1.5 rounded-lg text-xs font-bold tracking-wider">
-            LIVE VERSION
-          </div>
-        </header>
+  const { user, booting, banner, clearBanner, logout } = useAuth();
+  const [screen, setScreen] = useState('landing'); // 'landing' | 'register' | 'cabinet'
 
-        {/* Темная карточка */}
-        <div className="bg-[#111827] rounded-[32px] p-8 sm:p-10 text-white shadow-xl relative overflow-hidden">
-          {/* Контейнер flex для разделения заголовка и бейджа по краям */}
-          <div className="flex justify-between items-start mb-4 sm:mb-6">
-            <h2 className="text-2xl sm:text-3xl font-bold leading-tight max-w-[70%]">
-              Регистрация изменений в ГИБДД
-            </h2>
-            
-            {/* Надпись ОФИЦИАЛЬНО — перемещена вправо и сделана ЗОЛОТОЙ */}
-            <div className="flex items-center gap-1.5 border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 rounded-full flex-shrink-0 mt-1">
-              <ShieldCheck className="w-4 h-4 sm:w-5 sm:h-5 text-amber-400" />
-              <span className="text-[10px] sm:text-xs font-bold text-amber-400 uppercase tracking-wider">
-                Официально
-              </span>
+  const cta = useMemo(
+    () => ({
+      onRegister: () => setScreen('register'),
+      onCabinet: () => setScreen('cabinet'),
+      onHome: () => setScreen('landing'),
+    }),
+    [],
+  );
+
+  const needAuth = screen === 'register' || screen === 'cabinet';
+  const showLogin = needAuth && !user && !booting;
+
+  if (booting && needAuth) {
+    return (
+      <div className="min-h-screen p-4 sm:p-8 font-sans text-regdoc-navy flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3 text-regdoc-navy/70">
+          <Loader2 className="w-10 h-10 text-regdoc-cyan animate-spin" />
+          <p className="text-sm font-semibold">Загрузка сессии…</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen p-4 sm:p-8 font-sans text-regdoc-navy">
+      <div className="max-w-2xl mx-auto space-y-6">
+        {screen !== 'landing' && (
+        <header className="mb-2">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <RegdocLogo />
+            <div className="flex items-center gap-2">
+              {user && (
+                <span className="text-xs font-medium text-regdoc-navy/55 max-w-[200px] truncate hidden sm:inline">
+                  {user.email}
+                </span>
+              )}
+              {user && (
+                <button
+                  type="button"
+                  onClick={logout}
+                  className="px-4 py-2 rounded-2xl border border-regdoc-grey/60 bg-white/70 text-regdoc-navy font-bold text-sm hover:bg-white transition-all"
+                >
+                  Выйти
+                </button>
+              )}
+              {screen !== 'landing' && (
+                <button
+                  type="button"
+                  onClick={cta.onHome}
+                  className="px-4 py-2 rounded-2xl border border-regdoc-grey/60 bg-white/70 text-regdoc-navy font-bold text-sm hover:bg-white transition-all"
+                >
+                  На главную
+                </button>
+              )}
             </div>
           </div>
-          
-          <p className="text-slate-400 text-sm sm:text-base leading-relaxed max-w-xl">
-            Загрузите фото документов, и мы подготовим пакет для внесения изменений в конструкцию ТС.
-          </p>
-        </div>
+        </header>
+        )}
 
-        <main>
-          {/* Наша рабочая форма */}
-          <RegistrationFlow />
-        </main>
+        {banner && (
+          <div
+            className={`rounded-2xl px-4 py-3 text-sm font-semibold border ${
+              banner.type === 'ok'
+                ? 'bg-regdoc-mist border-regdoc-cyan/30 text-regdoc-teal'
+                : 'bg-red-50 border-red-100 text-red-700'
+            }`}
+          >
+            <div className="flex justify-between gap-3 items-start">
+              <span>{banner.text}</span>
+              <button type="button" onClick={clearBanner} className="text-regdoc-navy/45 hover:text-regdoc-navy shrink-0">
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
 
+        {screen === 'landing' ? (
+          <main>
+            <LandingPage onRegister={cta.onRegister} onCabinet={cta.onCabinet} />
+          </main>
+        ) : showLogin ? (
+          <main className="space-y-4">
+            <EmailAuthForm initialMode={screen === 'register' ? 'register' : 'login'} />
+          </main>
+        ) : (
+          <main>
+            <div className="flex justify-end">
+              <div className="hidden md:block bg-regdoc-navy rounded-[20px] px-3 py-2 text-white/80 text-[11px] font-bold tracking-wider mb-3">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-amber-400" />
+                  Официально
+                </div>
+              </div>
+            </div>
+            <RegistrationFlow />
+          </main>
+        )}
+
+        <footer className="text-center text-[11px] text-regdoc-navy/45 pb-4 flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
+          <RegdocIcon name="gears" className="w-4 h-4 text-regdoc-teal shrink-0" />
+          <span>Технологичность · Прозрачность · Удобство</span>
+        </footer>
       </div>
     </div>
   );

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Check, ChevronRight, User, Briefcase, FileSignature, FileCheck2, Camera, Paperclip, Loader2, FileText, CheckCircle2, RotateCw, History, PlusCircle, AlertCircle, Info, XCircle } from 'lucide-react';
 import imageCompression from 'browser-image-compression';
+import { authFetch, getToken } from '../lib/api.js';
 
 const steps = [
   { id: 1, title: 'Заявитель' }, 
@@ -60,6 +61,8 @@ export default function RegistrationFlow() {
 
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/api/upload', true);
+      const authTok = getToken();
+      if (authTok) xhr.setRequestHeader('Authorization', `Bearer ${authTok}`);
       
       xhr.upload.onprogress = (event) => {
           if (event.lengthComputable) {
@@ -91,7 +94,7 @@ export default function RegistrationFlow() {
           const data = new FormData();
           data.append('step', 'delete_folder');
           data.append('folderName', activeFolderName);
-          try { await fetch('/api/upload', { method: 'POST', body: data }); } catch(e) {}
+          try { await authFetch('/api/upload', { method: 'POST', body: data }); } catch(e) {}
       }
       window.location.reload(); 
   };
@@ -112,7 +115,7 @@ export default function RegistrationFlow() {
     }
     setIsSearching(true);
     try {
-      const res = await fetch(`/api/check-plate?plate=${encodeURIComponent(formData.licensePlate)}`);
+      const res = await authFetch(`/api/check-plate?plate=${encodeURIComponent(formData.licensePlate)}`);
       const data = await res.json();
       if (data.found) {
         setSearchCache(data);
@@ -233,7 +236,7 @@ export default function RegistrationFlow() {
     data.append('updateDescription', needsDescription.toString());
 
     try {
-      const res = await fetch('/api/upload', { method: 'POST', body: data });
+      const res = await authFetch('/api/upload', { method: 'POST', body: data });
       if (res.ok) setShowSuccess(true);
       else showAlert("Ошибка", "Не удалось завершить заявку.", "error");
     } catch(e) {
@@ -261,7 +264,7 @@ export default function RegistrationFlow() {
               data.append('companyName', formData.companyName);
               data.append('licensePlate', formData.licensePlate);
               try {
-                  const res = await fetch('/api/upload', { method: 'POST', body: data });
+                  const res = await authFetch('/api/upload', { method: 'POST', body: data });
                   const json = await res.json();
                   if (json.success) setActiveFolderName(json.folderName);
               } catch (e) {
@@ -279,7 +282,7 @@ export default function RegistrationFlow() {
           data.append('folderName', activeFolderName);
           data.append('docType', docType);
           try {
-              await fetch('/api/upload', { method: 'POST', body: data });
+              await authFetch('/api/upload', { method: 'POST', body: data });
           } catch (e) {
               setIsSubmitting(false);
               return showAlert("Ошибка", "Не удалось создать раздел услуги", "error");
@@ -301,19 +304,19 @@ export default function RegistrationFlow() {
   };
 
   return (
-    <div className="bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden max-w-2xl mx-auto relative min-h-[500px]">
+    <div className="bg-white rounded-3xl shadow-xl border border-regdoc-grey overflow-hidden max-w-2xl mx-auto relative min-h-[500px]">
       
       {modal.show && (
-        <div className="absolute inset-0 bg-[#111827]/40 backdrop-blur-md z-[200] flex items-center justify-center p-6 animate-in fade-in zoom-in-95 duration-200">
-          <div className="bg-white rounded-[40px] p-8 w-full max-w-sm text-center shadow-2xl border-t-4 border-slate-100">
-            <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 ${modal.type === 'error' ? 'bg-red-100 text-red-500' : 'bg-blue-100 text-blue-500'}`}>
+        <div className="absolute inset-0 bg-regdoc-navy/40 backdrop-blur-md z-[200] flex items-center justify-center p-6 animate-in fade-in zoom-in-95 duration-200">
+          <div className="bg-white rounded-[40px] p-8 w-full max-w-sm text-center shadow-2xl border-t-4 border-regdoc-cyan/40">
+            <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 ${modal.type === 'error' ? 'bg-red-100 text-red-500' : 'bg-regdoc-mist text-regdoc-cyan'}`}>
               {modal.type === 'error' ? <AlertCircle size={32} /> : <Info size={32} />}
             </div>
-            <h3 className="text-xl font-bold text-slate-800 mb-2">{modal.title}</h3>
-            <p className="text-slate-500 text-sm leading-relaxed mb-8">{modal.message}</p>
+            <h3 className="text-xl font-bold text-regdoc-navy mb-2">{modal.title}</h3>
+            <p className="text-regdoc-navy/55 text-sm leading-relaxed mb-8">{modal.message}</p>
             <button 
                 onClick={() => setModal({ ...modal, show: false })}
-                className="w-full py-4 bg-slate-900 text-white font-bold rounded-2xl hover:opacity-90 transition-all shadow-lg"
+                className="w-full py-4 bg-regdoc-cyan text-white font-bold rounded-2xl hover:bg-regdoc-teal transition-all shadow-lg"
             >
                 Понятно
             </button>
@@ -322,14 +325,14 @@ export default function RegistrationFlow() {
       )}
 
       {showExitPrompt && (
-        <div className="absolute inset-0 bg-[#111827]/95 backdrop-blur-md z-[150] flex items-center justify-center p-6 animate-in zoom-in-95">
+        <div className="absolute inset-0 bg-regdoc-navy/95 backdrop-blur-md z-[150] flex items-center justify-center p-6 animate-in zoom-in-95">
           <div className="bg-white rounded-[40px] p-8 w-full max-w-md shadow-2xl text-center">
             <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4"><XCircle size={32} /></div>
-            <h3 className="text-xl font-bold text-slate-800 mb-2">Отменить заявку?</h3>
-            <p className="text-slate-500 text-sm mb-8">Вы хотите завершить отправку (сохранить загруженные файлы) или отменить и полностью удалить всю папку с сервера?</p>
+            <h3 className="text-xl font-bold text-regdoc-navy mb-2">Отменить заявку?</h3>
+            <p className="text-regdoc-navy/55 text-sm mb-8">Вы хотите завершить отправку (сохранить загруженные файлы) или отменить и полностью удалить всю папку с сервера?</p>
             <div className="space-y-3">
-                <button onClick={() => setShowExitPrompt(false)} className="w-full py-4 bg-brandGreen text-white font-bold rounded-2xl hover:opacity-90 transition-all">Завершить отправку</button>
-                <button onClick={() => setShowExitPrompt(false)} className="w-full py-4 bg-slate-100 text-slate-600 font-bold rounded-2xl hover:bg-slate-200 transition-all">Назад</button>
+                <button onClick={() => setShowExitPrompt(false)} className="w-full py-4 bg-regdoc-cyan text-white font-bold rounded-2xl hover:bg-regdoc-teal transition-all">Завершить отправку</button>
+                <button onClick={() => setShowExitPrompt(false)} className="w-full py-4 bg-regdoc-grey text-regdoc-navy/65 font-bold rounded-2xl hover:bg-regdoc-grey/80 transition-all">Назад</button>
                 <button onClick={handleAbortAndClean} disabled={isSubmitting} className="w-full py-4 bg-red-50 text-red-600 font-bold rounded-2xl hover:bg-red-100 transition-all">{isSubmitting ? <Loader2 className="animate-spin mx-auto" /> : "Удалить заявку и выйти"}</button>
             </div>
           </div>
@@ -337,40 +340,40 @@ export default function RegistrationFlow() {
       )}
 
       {showDecision && (
-        <div className="absolute inset-0 bg-[#111827]/95 backdrop-blur-md z-[110] flex items-center justify-center p-6 animate-in zoom-in-95">
+        <div className="absolute inset-0 bg-regdoc-navy/95 backdrop-blur-md z-[110] flex items-center justify-center p-6 animate-in zoom-in-95">
           <div className="bg-white rounded-[40px] p-8 w-full max-w-md shadow-2xl">
-            <div className="w-16 h-16 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto mb-4"><History size={32} /></div>
-            <h3 className="text-xl font-bold text-slate-800 text-center mb-2">Найдена заявка!</h3>
-            <p className="text-slate-500 text-center text-sm mb-8">Для автомобиля <b>{formData.licensePlate}</b>. Как поступим?</p>
+            <div className="w-16 h-16 bg-regdoc-orange/15 text-regdoc-orange rounded-full flex items-center justify-center mx-auto mb-4"><History size={32} /></div>
+            <h3 className="text-xl font-bold text-regdoc-navy text-center mb-2">Найдена заявка!</h3>
+            <p className="text-regdoc-navy/55 text-center text-sm mb-8">Для автомобиля <b>{formData.licensePlate}</b>. Как поступим?</p>
             <div className="space-y-3">
-                <button onClick={() => handleDecision('continue')} className="w-full py-4 bg-brandGreen text-white font-bold rounded-2xl flex items-center justify-center gap-2 transition-all"><RotateCw size={18} /> Продолжить</button>
-                <button onClick={() => handleDecision('new')} className="w-full py-4 bg-slate-100 text-slate-600 font-bold rounded-2xl flex items-center justify-center gap-2 transition-all"><PlusCircle size={18} /> Создать новую</button>
+                <button onClick={() => handleDecision('continue')} className="w-full py-4 bg-regdoc-cyan text-white font-bold rounded-2xl flex items-center justify-center gap-2 hover:bg-regdoc-teal transition-all"><RotateCw size={18} /> Продолжить</button>
+                <button onClick={() => handleDecision('new')} className="w-full py-4 bg-regdoc-grey text-regdoc-navy/65 font-bold rounded-2xl flex items-center justify-center gap-2 hover:bg-regdoc-grey/80 transition-all"><PlusCircle size={18} /> Создать новую</button>
             </div>
           </div>
         </div>
       )}
 
       {showSuccess && (
-        <div className="absolute inset-0 bg-[#111827]/90 backdrop-blur-md z-[100] flex items-center justify-center p-6 animate-in fade-in">
+        <div className="absolute inset-0 bg-regdoc-navy/90 backdrop-blur-md z-[100] flex items-center justify-center p-6 animate-in fade-in">
           <div className="bg-white rounded-[40px] p-10 w-full max-w-sm text-center shadow-2xl">
-            <div className="w-20 h-20 bg-green-100 text-brandGreen rounded-full flex items-center justify-center mx-auto mb-6"><CheckCircle2 size={48} /></div>
-            <h3 className="text-slate-400 text-[10px] font-bold uppercase tracking-[0.2em] mb-2 text-center">Ответ от регистратора:</h3>
-            <p className="text-xl font-bold text-slate-800 mb-8 text-center">Заявка принята в работу!</p>
-            <button onClick={() => window.location.reload()} className="w-full py-4 bg-brandGreen text-white font-bold rounded-2xl shadow-lg shadow-green-900/20">Отлично</button>
+            <div className="w-20 h-20 bg-regdoc-mist text-regdoc-cyan rounded-full flex items-center justify-center mx-auto mb-6"><CheckCircle2 size={48} /></div>
+            <h3 className="text-regdoc-navy/40 text-[10px] font-bold uppercase tracking-[0.2em] mb-2 text-center">Ответ от регистратора:</h3>
+            <p className="text-xl font-bold text-regdoc-navy mb-8 text-center">Заявка принята в работу!</p>
+            <button onClick={() => window.location.reload()} className="w-full py-4 bg-regdoc-cyan text-white font-bold rounded-2xl shadow-lg shadow-regdoc-navy/25 hover:bg-regdoc-teal transition-colors">Отлично</button>
           </div>
         </div>
       )}
 
       {(isCompressing || isSearching) && (
         <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center rounded-3xl">
-          <Loader2 className="w-10 h-10 text-brandGreen animate-spin mb-3" />
-          <p className="text-slate-700 font-semibold">{isSearching ? 'Связь с облаком...' : 'Сжатие файлов...'}</p>
+          <Loader2 className="w-10 h-10 text-regdoc-cyan animate-spin mb-3" />
+          <p className="text-regdoc-navy font-semibold">{isSearching ? 'Связь с облаком...' : 'Сжатие файлов...'}</p>
         </div>
       )}
 
-      <div className="bg-slate-50 p-4 border-b border-slate-100 flex justify-between px-8 sm:px-12">
+      <div className="bg-regdoc-grey/60 p-4 border-b border-regdoc-grey flex justify-between px-8 sm:px-12">
         {steps.map((s) => (
-          <div key={s.id} className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-all ${currentStep >= s.id ? 'bg-brandGreen border-brandGreen text-white' : 'bg-white border-slate-200 text-slate-400'}`}>
+          <div key={s.id} className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-all ${currentStep >= s.id ? 'bg-regdoc-cyan border-regdoc-cyan text-white' : 'bg-white border-regdoc-grey text-regdoc-navy/35'}`}>
             {currentStep > s.id ? <Check size={14} /> : s.id}
           </div>
         ))}
@@ -381,15 +384,15 @@ export default function RegistrationFlow() {
         {currentStep === 1 && (
             <div className="space-y-6 animate-in slide-in-from-bottom-2">
                 <div className="space-y-3">
-                    <h3 className="font-bold text-lg text-slate-800">Начните с номера авто</h3>
+                    <h3 className="font-bold text-lg text-regdoc-navy">Начните с номера авто</h3>
                     <div className="relative">
                         <Input label="Гос. номер автомобиля (необязательно)" value={formData.licensePlate} onChange={() => {}} onInput={handlePlateInput} placeholder="А 123 АА / 77" isMono />
-                        <button onClick={checkExistingApplication} className="absolute right-3 bottom-3 p-2 bg-brandGreen text-white rounded-xl shadow-md hover:scale-105 active:scale-95 transition-all"><RotateCw size={20} className={isSearching ? 'animate-spin' : ''} /></button>
+                        <button onClick={checkExistingApplication} className="absolute right-3 bottom-3 p-2 bg-regdoc-cyan text-white rounded-xl shadow-md hover:bg-regdoc-teal hover:scale-105 active:scale-95 transition-all"><RotateCw size={20} className={isSearching ? 'animate-spin' : ''} /></button>
                     </div>
                 </div>
-                <hr className="border-slate-100" />
+                <hr className="border-regdoc-grey" />
                 <div className="space-y-4">
-                    <h3 className="font-bold text-lg text-slate-800">Кто собственник ТС?</h3>
+                    <h3 className="font-bold text-lg text-regdoc-navy">Кто собственник ТС?</h3>
                     <SelectionCard active={clientType === 'individual'} onClick={() => setClientType('individual')} icon={<User />} title="Физическое лицо" desc="Частный владелец" />
                     <SelectionCard active={clientType === 'legal'} onClick={() => setClientType('legal')} icon={<Briefcase />} title="Юридическое лицо / ИП" desc="На компанию" />
                 </div>
@@ -398,7 +401,7 @@ export default function RegistrationFlow() {
 
         {currentStep === 2 && (
           <div className="space-y-5 animate-in slide-in-from-bottom-2">
-            <h3 className="font-bold text-lg text-slate-800">Персональные данные</h3>
+            <h3 className="font-bold text-lg text-regdoc-navy">Персональные данные</h3>
             <Input label="Гос. номер автомобиля (ОБЯЗАТЕЛЬНО)" value={formData.licensePlate} onChange={() => {}} onInput={handlePlateInput} placeholder="А 123 АА / 77" isMono />
             {clientType === 'legal' && <Input label="Название компании" value={formData.companyName} onChange={v => setFormData({...formData, companyName: v})} placeholder="ООО Элит Газ" />}
             <Input label={clientType === 'legal' ? "ФИО представителя" : "ФИО собственника полностью"} value={formData.fullName} onChange={handleFullNameChange} placeholder="Иванов Иван Иванович" />
@@ -407,7 +410,7 @@ export default function RegistrationFlow() {
 
         {currentStep === 3 && (
             <div className="space-y-4 animate-in slide-in-from-bottom-2">
-                <h3 className="font-bold text-lg text-slate-800">Что оформляем?</h3>
+                <h3 className="font-bold text-lg text-regdoc-navy">Что оформляем?</h3>
                 <SelectionCard active={docType === 'pz'} onClick={() => setDocType('pz')} icon={<FileSignature />} title="Предварительное заключение (ПЗ)" desc="До установки ГБО" />
                 <SelectionCard active={docType === 'pb'} onClick={() => setDocType('pb')} icon={<FileCheck2 />} title="Протокол безопасности (ПБ)" desc="После установки" />
             </div>
@@ -415,9 +418,9 @@ export default function RegistrationFlow() {
 
         {currentStep === 4 && (
           <div className="space-y-4 animate-in slide-in-from-bottom-2">
-            <h3 className="font-bold text-lg text-slate-800">Загрузите фотографии или PDF</h3>
-            <div className="bg-blue-50 p-3 rounded-2xl flex gap-3 text-blue-700 text-xs border border-blue-100">
-              <Info size={16} className="shrink-0 mt-0.5" />
+            <h3 className="font-bold text-lg text-regdoc-navy">Загрузите фотографии или PDF</h3>
+            <div className="bg-regdoc-mist p-3 rounded-2xl flex gap-3 text-regdoc-teal text-xs border border-regdoc-cyan/25">
+              <Info size={16} className="shrink-0 mt-0.5 text-regdoc-cyan" />
               <p>Ограничение по размеру одного файла — <b>не более 5 МБ</b>.</p>
             </div>
             <UploadCard title="Паспорт собственника" desc="2 разворота" files={files.passport} existing={existingCloudFiles.passport} onUpload={e => handleFileChange(e, 'passport')} onRemove={i => setFiles({...files, passport: files.passport.filter((_,idx)=>idx!==i)})} fileStatuses={fileStatuses} onSimulateUpload={(f) => handleRealUpload(f, 'passport')} />
@@ -430,18 +433,18 @@ export default function RegistrationFlow() {
         {currentStep === 5 && (
           <div className="space-y-4">
             <div className="flex justify-between items-center mb-2">
-                <h3 className="font-bold text-lg text-slate-800">Тип переоборудования</h3>
+                <h3 className="font-bold text-lg text-regdoc-navy">Тип переоборудования</h3>
                 {hasExistingDescription && !isDescriptionEditable && (
                     <button 
                         onClick={() => setIsDescriptionEditable(true)}
-                        className="px-4 py-1.5 bg-slate-100 text-slate-600 font-bold rounded-xl shadow-sm hover:bg-slate-200 transition-all text-[11px] uppercase tracking-wider"
+                        className="px-4 py-1.5 bg-regdoc-grey text-regdoc-navy/65 font-bold rounded-xl shadow-sm hover:bg-regdoc-grey/80 transition-all text-[11px] uppercase tracking-wider"
                     >
                         Изменить
                     </button>
                 )}
             </div>
             <textarea 
-                className={`w-full h-44 p-5 rounded-2xl outline-none focus:border-brandGreen leading-relaxed transition-all ${!isDescriptionEditable ? 'bg-slate-100/50 border border-slate-200 text-slate-400 cursor-not-allowed' : 'bg-slate-50/30 border border-slate-200 text-slate-700'}`} 
+                className={`w-full h-44 p-5 rounded-2xl outline-none focus:border-regdoc-cyan leading-relaxed transition-all ${!isDescriptionEditable ? 'bg-regdoc-grey/50 border border-regdoc-grey text-regdoc-navy/40 cursor-not-allowed' : 'bg-white border border-regdoc-grey text-regdoc-navy'}`} 
                 value={formData.conversionType} 
                 onChange={e => setFormData({...formData, conversionType: e.target.value})} 
                 disabled={!isDescriptionEditable}
@@ -457,14 +460,14 @@ export default function RegistrationFlow() {
                       return showAlert("Загрузка файлов", "Пожалуйста, дождитесь окончания загрузки файлов перед переходом на другой этап.", "info");
                   }
                   setCurrentStep(prev => prev - 1);
-              }} className="px-6 py-4 rounded-2xl border border-slate-200 font-bold text-slate-500 hover:bg-slate-50 transition-all">Назад</button>
+              }} className="px-6 py-4 rounded-2xl border border-regdoc-grey font-bold text-regdoc-navy/50 hover:bg-regdoc-grey/40 transition-all">Назад</button>
             )}
 
             {currentStep === 5 && (
-              <button onClick={() => setCurrentStep(prev => prev - 1)} className="px-6 py-4 rounded-2xl border border-slate-200 font-bold text-slate-500 hover:bg-slate-50 transition-all">Назад</button>
+              <button onClick={() => setCurrentStep(prev => prev - 1)} className="px-6 py-4 rounded-2xl border border-regdoc-grey font-bold text-regdoc-navy/50 hover:bg-regdoc-grey/40 transition-all">Назад</button>
             )}
 
-            <button onClick={handleNextStep} disabled={isSubmitting} className="flex-1 py-4 bg-brandGreen text-white font-bold rounded-2xl shadow-lg flex items-center justify-center">
+            <button onClick={handleNextStep} disabled={isSubmitting} className="flex-1 py-4 bg-regdoc-cyan text-white font-bold rounded-2xl shadow-lg shadow-regdoc-navy/10 hover:bg-regdoc-teal transition-colors flex items-center justify-center disabled:opacity-60">
               {isSubmitting ? <Loader2 className="animate-spin" /> : (currentStep === 5 ? 'Отправить документы' : 'Далее')}
             </button>
           </div>
@@ -480,11 +483,11 @@ export default function RegistrationFlow() {
 
 function SelectionCard({ active, onClick, icon, title, desc }) {
   return (
-    <div onClick={onClick} className={`p-4 rounded-2xl border-2 cursor-pointer flex items-center gap-4 transition-all ${active ? 'border-brandGreen bg-green-50 shadow-sm' : 'border-slate-100 bg-white shadow-sm hover:border-slate-200'}`}>
-      <div className={`p-3 rounded-xl ${active ? 'bg-brandGreen text-white' : 'bg-slate-100 text-slate-400'}`}>{icon}</div>
+    <div onClick={onClick} className={`p-4 rounded-2xl border-2 cursor-pointer flex items-center gap-4 transition-all ${active ? 'border-regdoc-cyan bg-regdoc-mist shadow-sm' : 'border-regdoc-grey bg-white shadow-sm hover:border-regdoc-grey'}`}>
+      <div className={`p-3 rounded-xl ${active ? 'bg-regdoc-cyan text-white' : 'bg-regdoc-grey/80 text-regdoc-navy/40'}`}>{icon}</div>
       <div className="flex-1">
-        <div className="font-bold text-slate-800 text-sm">{title}</div>
-        <div className="text-[11px] text-slate-500 leading-tight">{desc}</div>
+        <div className="font-bold text-regdoc-navy text-sm">{title}</div>
+        <div className="text-[11px] text-regdoc-navy/50 leading-tight">{desc}</div>
       </div>
     </div>
   );
@@ -493,28 +496,28 @@ function SelectionCard({ active, onClick, icon, title, desc }) {
 function Input({ label, value, onChange, onInput, placeholder, isMono }) {
   return (
     <div className="space-y-1.5">
-      <label className="text-[10px] font-bold text-slate-400 uppercase ml-1 tracking-wider">{label}</label>
-      <input type="text" value={value} onInput={onInput} onChange={e => onChange(e.target.value)} placeholder={placeholder} className={`w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:border-brandGreen focus:bg-white transition-all ${isMono ? 'font-mono text-lg tracking-widest' : ''}`} />
+      <label className="text-[10px] font-bold text-regdoc-navy/45 uppercase ml-1 tracking-wider">{label}</label>
+      <input type="text" value={value} onInput={onInput} onChange={e => onChange(e.target.value)} placeholder={placeholder} className={`w-full p-4 bg-regdoc-grey/40 border border-regdoc-grey rounded-2xl outline-none focus:border-regdoc-cyan focus:bg-white transition-all ${isMono ? 'font-mono text-lg tracking-widest' : ''}`} />
     </div>
   );
 }
 
 function UploadCard({ title, desc, files, existing, onUpload, onRemove, fileStatuses, onSimulateUpload }) {
   return (
-    <div className="border border-slate-200 rounded-2xl p-4 bg-slate-50/40">
+    <div className="border border-regdoc-grey rounded-2xl p-4 bg-regdoc-grey/35">
       <div className="flex justify-between items-start mb-3">
         <div>
-          <div className="font-bold text-slate-800 text-sm leading-none">{title}</div>
-          <div className="text-[10px] text-slate-400 uppercase font-bold mt-1 tracking-tight">{desc}</div>
+          <div className="font-bold text-regdoc-navy text-sm leading-none">{title}</div>
+          <div className="text-[10px] text-regdoc-navy/45 uppercase font-bold mt-1 tracking-tight">{desc}</div>
         </div>
         <div className="flex gap-2">
-            <label className="bg-white p-2.5 rounded-xl shadow-sm border border-slate-100 cursor-pointer text-slate-500 hover:text-brandGreen active:scale-95 transition-all"><Paperclip size={20} /><input type="file" multiple className="hidden" onChange={onUpload} accept="image/*,.pdf" /></label>
-            <label className="sm:hidden bg-white p-2.5 rounded-xl shadow-sm border border-slate-100 cursor-pointer text-brandGreen active:scale-95 transition-all"><Camera size={20} /><input type="file" className="hidden" onChange={onUpload} accept="image/*" capture="environment" /></label>
+            <label className="bg-white p-2.5 rounded-xl shadow-sm border border-regdoc-grey cursor-pointer text-regdoc-navy/50 hover:text-regdoc-cyan active:scale-95 transition-all"><Paperclip size={20} /><input type="file" multiple className="hidden" onChange={onUpload} accept="image/*,.pdf" /></label>
+            <label className="sm:hidden bg-white p-2.5 rounded-xl shadow-sm border border-regdoc-grey cursor-pointer text-regdoc-cyan active:scale-95 transition-all"><Camera size={20} /><input type="file" className="hidden" onChange={onUpload} accept="image/*" capture="environment" /></label>
         </div>
       </div>
       <div className="flex flex-wrap gap-2">
         {existing && existing.map((name, i) => (
-            <div key={i} className="bg-green-50 border border-green-200 px-2.5 py-1.5 rounded-xl text-[10px] text-green-700 flex items-center gap-1 font-semibold animate-in zoom-in-95">
+            <div key={i} className="bg-regdoc-mist border border-regdoc-cyan/30 px-2.5 py-1.5 rounded-xl text-[10px] text-regdoc-teal flex items-center gap-1 font-semibold animate-in zoom-in-95">
                 <Check size={10} strokeWidth={3} /> {name} (В облаке)
             </div>
         ))}
@@ -522,17 +525,17 @@ function UploadCard({ title, desc, files, existing, onUpload, onRemove, fileStat
             const key = f.name + f.size;
             const status = fileStatuses && fileStatuses[key] ? fileStatuses[key] : { state: 'pending', progress: 0 };
             return (
-                <div key={i} className="bg-white border border-brandGreen/20 p-2 rounded-xl text-[10px] flex flex-col gap-1.5 shadow-sm animate-in zoom-in-95 min-w-[140px] flex-1">
+                <div key={i} className="bg-white border border-regdoc-cyan/25 p-2 rounded-xl text-[10px] flex flex-col gap-1.5 shadow-sm animate-in zoom-in-95 min-w-[140px] flex-1">
                     <div className="flex items-center justify-between gap-2">
-                        <span className="truncate max-w-[100px] font-medium text-slate-700">{f.name}</span>
+                        <span className="truncate max-w-[100px] font-medium text-regdoc-navy">{f.name}</span>
                         <div className="flex items-center gap-1">
                             {status.state === 'pending' && (
-                                <button onClick={() => onSimulateUpload(f)} className="text-white bg-brandGreen hover:bg-green-700 rounded-md p-0.5 transition-colors shadow-md" title="Загрузить на сервер">
+                                <button onClick={() => onSimulateUpload(f)} className="text-white bg-regdoc-cyan hover:bg-regdoc-teal rounded-md p-0.5 transition-colors shadow-md" title="Загрузить на сервер">
                                     <Check size={12} strokeWidth={4} />
                                 </button>
                             )}
                             {status.state === 'done' && (
-                                <CheckCircle2 size={14} className="text-brandGreen" />
+                                <CheckCircle2 size={14} className="text-regdoc-cyan" />
                             )}
                             {status.state !== 'done' && status.state !== 'uploading' && (
                                 <button onClick={() => onRemove(i)} className="text-red-400 hover:text-red-600 font-bold p-1 transition-colors" title="Удалить">✕</button>
@@ -540,8 +543,8 @@ function UploadCard({ title, desc, files, existing, onUpload, onRemove, fileStat
                         </div>
                     </div>
                     {status.state === 'uploading' && (
-                        <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                            <div className="bg-brandGreen h-full transition-all duration-200" style={{ width: `${status.progress}%` }}></div>
+                        <div className="w-full bg-regdoc-grey h-1.5 rounded-full overflow-hidden">
+                            <div className="bg-regdoc-cyan h-full transition-all duration-200" style={{ width: `${status.progress}%` }}></div>
                         </div>
                     )}
                 </div>

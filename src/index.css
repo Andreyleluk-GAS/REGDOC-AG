@@ -1,12 +1,36 @@
 @import "tailwindcss";
 
 @theme {
-  --color-brandGreen: #1a5d1a;
+  --font-sans: "Roboto", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Montserrat", "Roboto", ui-sans-serif, system-ui, sans-serif;
+
+  --color-regdoc-navy: #1b2a4b;
+  --color-regdoc-cyan: #00c4cc;
+  --color-regdoc-grey: #e1e4e8;
+  --color-regdoc-teal: #008080;
+  --color-regdoc-orange: #ff7f50;
+  --color-regdoc-white: #ffffff;
+  --color-regdoc-mist: #e8f8f9;
+
+  /* совместимость со старыми классами */
+  --color-brandGreen: var(--color-regdoc-cyan);
   --color-brandRed: #d32f2f;
 }
 
 body {
   margin: 0;
-  background-color: #f8fafc;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background-color: var(--color-regdoc-grey);
+  background-image: repeating-linear-gradient(
+    -12deg,
+    transparent,
+    transparent 6px,
+    rgb(27 42 75 / 0.03) 6px,
+    rgb(27 42 75 / 0.03) 7px
+  );
+  font-family: var(--font-sans);
+  color: var(--color-regdoc-navy);
+}
+
+.font-display {
+  font-family: var(--font-display);
 }
