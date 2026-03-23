@@ -30,7 +30,6 @@ function App() {
   const cta = useMemo(
     () => ({
       onRegister: () => { setEditingRequest(null); setScreen('register'); },
-      // Изменено: добавлен параметр step для открытия конкретного этапа
       onEditRequest: (req, docType, step = 4) => { 
         setEditingRequest({...req, targetDocType: docType, forcedStep: step}); 
         setScreen('register'); 
@@ -52,16 +51,25 @@ function App() {
     </button>
   );
 
+  // Изменено: Обновленная логика загрузки заявок и перенаправления
   useEffect(() => {
-    if (screen === 'cabinet' && user) {
+    if (user) {
       setLoadingReqs(true);
       authFetch('/api/my-requests')
         .then(res => res.json())
-        .then(data => { if (Array.isArray(data)) setRequests(data); })
+        .then(data => { 
+          if (Array.isArray(data)) {
+            setRequests(data);
+            // Если пользователь залогинился (screen 'cabinet') и заявок нет — сразу на регистрацию
+            if (data.length === 0 && screen === 'cabinet') {
+              setScreen('register');
+            }
+          }
+        })
         .catch(err => console.error(err))
         .finally(() => setLoadingReqs(false));
     }
-  }, [screen, user]);
+  }, [user, screen]);
 
   const needAuth = screen === 'register' || screen === 'cabinet';
   const showLogin = needAuth && !user && !booting;
@@ -99,14 +107,24 @@ function App() {
                   Выйти
                 </button>
               )}
-              {/* Изменено: кнопка "На главную" скрыта, если открыт кабинет (список заявок) */}
-              {screen !== 'landing' && screen !== 'cabinet' && (
+              {/* Изменено: Кнопка "К списку заявок" с логикой активности и алертом */}
+              {screen === 'register' && (
                 <button
                   type="button"
-                  onClick={cta.onHome}
-                  className="px-4 py-2 rounded-2xl border border-regdoc-grey/60 bg-white/70 text-regdoc-navy font-bold text-sm hover:bg-white transition-all"
+                  onClick={() => {
+                    if (requests.length > 0) {
+                      cta.onCabinet();
+                    } else {
+                      alert("У вас еще нет заявок");
+                    }
+                  }}
+                  className={`px-4 py-2 rounded-2xl border border-regdoc-grey/60 font-bold text-sm transition-all ${
+                    requests.length > 0 
+                      ? "bg-white/70 text-regdoc-navy hover:bg-white" 
+                      : "bg-gray-100 text-gray-400 opacity-50 cursor-not-allowed"
+                  }`}
                 >
-                  На главную
+                  К списку заявок
                 </button>
               )}
             </div>
@@ -178,9 +196,7 @@ function App() {
                             <div className="text-[10px] font-bold text-regdoc-navy/40 uppercase">{req.full_name?.replace(/_/g, ' ')}</div>
                           </div>
 
-                          {/* Изменено: Кнопки компактно в две строки */}
                           <div className="flex flex-col gap-2 items-end">
-                            {/* Первая строка: ПЗ */}
                             <div className="flex gap-2">
                               <StatusBadge
                                 label="Документы для ПЗ"
@@ -194,12 +210,10 @@ function App() {
                                 onClick={() => !isPZ_Ready ? setWorkAlert(true) : null}
                               />
                             </div>
-                            {/* Вторая строка: ПБ */}
                             <div className="flex gap-2">
                               <StatusBadge
                                 label="Документы для ПБ"
                                 isGreen={isPB_Submitted}
-                                // Изменено: при нажатии открывается этап 4
                                 onClick={() => cta.onEditRequest(req, 'pb', 4)}
                                 tooltip={!isPB_Submitted ? "Не хватает документов" : undefined}
                               />
