@@ -26,7 +26,6 @@ function App() {
   const [loadingReqs, setLoadingReqs] = useState(false);
   const [editingRequest, setEditingRequest] = useState(null);
   
-  // Изменено: Состояние алерта теперь принимает 'work' (в работе) | 'dev' (в разработке) | null
   const [activeAlert, setActiveAlert] = useState(null);
 
   const cta = useMemo(
@@ -53,6 +52,8 @@ function App() {
     </button>
   );
 
+  // ИЗМЕНЕНО: Эффект теперь зависит от [user, screen]. 
+  // При КАЖДОМ открытии кабинета отправляется запрос, который проверяет папки и requests.xlsx
   useEffect(() => {
     if (user) {
       setLoadingReqs(true);
@@ -61,16 +62,18 @@ function App() {
         .then(data => { 
           if (Array.isArray(data)) {
             setRequests(data);
-            if (screen === 'landing' || screen === 'cabinet') {
+            if (screen === 'landing') {
                if (data.length > 0) setScreen('cabinet');
                else setScreen('register');
+            } else if (screen === 'cabinet' && data.length === 0) {
+               setScreen('register');
             }
           }
         })
         .catch(err => console.error(err))
         .finally(() => setLoadingReqs(false));
     }
-  }, [user]);
+  }, [user, screen]);
 
   const needAuth = screen === 'register' || screen === 'cabinet';
   const showLogin = needAuth && !user && !booting;
@@ -157,7 +160,6 @@ function App() {
               ) : (
                 <div className="space-y-3">
                   {requests.map((req, idx) => {
-                    // Переменные для дальнейшего функционала готовности документов
                     const isPZ_Ready = false; 
                     const isPB_Ready = false;
 
@@ -170,14 +172,12 @@ function App() {
                           </div>
                           <div className="flex flex-col gap-2 items-end">
                             <div className="flex gap-2">
-                              {/* Изменено: Маршрутизация на 3 или 4 этап в зависимости от цвета (наличия папки) */}
                               <StatusBadge 
                                 label="Документы для ПЗ" 
                                 isGreen={req.type_PZ === 'yes'} 
                                 onClick={() => cta.onEditRequest(req, 'pz', req.type_PZ === 'yes' ? 4 : 3)} 
                                 tooltip={req.type_PZ !== 'yes' ? "Не хватает документов" : undefined} 
                               />
-                              {/* Изменено: Вызов алерта в зависимости от статуса */}
                               <StatusBadge 
                                 label="ПЗ: готово" 
                                 isGreen={isPZ_Ready} 
@@ -185,14 +185,12 @@ function App() {
                               />
                             </div>
                             <div className="flex gap-2">
-                              {/* Изменено: Маршрутизация на 3 или 4 этап в зависимости от цвета (наличия папки) */}
                               <StatusBadge 
                                 label="Документы для ПБ" 
                                 isGreen={req.type_PB === 'yes'} 
                                 onClick={() => cta.onEditRequest(req, 'pb', req.type_PB === 'yes' ? 4 : 3)} 
                                 tooltip={req.type_PB !== 'yes' ? "Не хватает документов" : undefined} 
                               />
-                              {/* Изменено: Вызов алерта в зависимости от статуса */}
                               <StatusBadge 
                                 label="ПБ: готово" 
                                 isGreen={isPB_Ready} 
@@ -207,7 +205,6 @@ function App() {
                 </div>
               )}
 
-              {/* Изменено: Динамический алерт для разных состояний */}
               {activeAlert && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
                   <div className="bg-white rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl border border-regdoc-grey">

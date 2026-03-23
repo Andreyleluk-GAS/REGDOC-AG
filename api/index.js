@@ -16,7 +16,7 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, service: 'regdoc-api' });
 });
 
-// ИЗМЕНЕНО: Добавлена обязательная предварительная проверка наличия папок перед выдачей списка заявок
+// ИЗМЕНЕНО: Обязательная предварительная проверка наличия папок и новых записей requests.xlsx
 app.get('/api/my-requests', async (req, res) => {
     try {
         const authHeader = req.headers.authorization;
@@ -25,6 +25,7 @@ app.get('/api/my-requests', async (req, res) => {
         const decoded = jwt.verify(token, process.env.JWT_SECRET || 'dev-only-change-JWT_SECRET-in-env');
         const userEmail = decoded.email.toLowerCase();
 
+        // Читаем актуальный Excel (включая свежие заявки)
         const allRequests = await loadRequests();
         const userReqs = allRequests.filter(r => String(r.email).toLowerCase() === userEmail);
         
@@ -36,6 +37,7 @@ app.get('/api/my-requests', async (req, res) => {
                 const fPlate = normalizePlate(String(r.car_number || ''));
                 const folderName = `[${dateParts[2]}.${dateParts[1]}.${dateParts[0]}][${fName}][${fPlate}]`;
                 
+                // Проверяем физическое наличие папок
                 const pzExists = await client.exists(`/RegDoc_Заявки/${folderName}/Для ПЗ`);
                 const pbExists = await client.exists(`/RegDoc_Заявки/${folderName}/Для ПБ`);
                 
@@ -50,6 +52,7 @@ app.get('/api/my-requests', async (req, res) => {
             }
         }
 
+        // Если были изменения по факту папок — обновляем requests.xlsx
         if (updates.length > 0) {
             await withRequestsLock(async (requestsToUpdate) => {
                 for (let u of updates) {
@@ -190,7 +193,6 @@ app.post('/api/upload', upload.any(), async (req, res) => {
             userEmail = decoded.email;
         }
 
-        // ИЗМЕНЕНО: Добавлен шаг принудительной фоновой синхронизации
         if (step === 'sync_request') {
             if (userEmail && folderName) await syncRequestRecord(folderName, userEmail);
             return res.json({ success: true });
