@@ -509,7 +509,7 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
         ))}
       </div>
 
-      <div className="p-6 sm:p-8">
+      <div className="p-4 sm:p-8">
         
         {currentStep === 1 && (
             <div className="space-y-6 animate-in slide-in-from-bottom-2">
@@ -547,7 +547,7 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
         )}
 
         {currentStep === 4 && (
-          <div className="space-y-4 animate-in slide-in-from-bottom-2">
+          <div className="space-y-2 sm:space-y-4 animate-in slide-in-from-bottom-2">
             <h3 className="font-bold text-lg text-regdoc-navy">Загрузите фотографии или PDF</h3>
             
             <div className="bg-regdoc-mist p-3 rounded-2xl flex gap-3 text-regdoc-teal text-xs border border-regdoc-cyan/25">
@@ -593,11 +593,11 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
         )}
 
         {currentStep === 5 && (
-          <div className="space-y-4 animate-in slide-in-from-bottom-2">
+          <div className="space-y-2 sm:space-y-4 animate-in slide-in-from-bottom-2">
             {docType === 'pz' ? (
                 <>
-                    <div className="flex justify-between items-center mb-2">
-                        <h3 className="font-bold text-lg text-regdoc-navy">Тип переоборудования</h3>
+                    <div className="flex justify-between items-center mb-2 sm:mb-4">
+                        <h3 className="font-bold text-base sm:text-lg text-regdoc-navy">Тип переоборудования</h3>
                         {hasExistingDescription && !isDescriptionEditable && (
                             <button 
                                 onClick={() => setIsDescriptionEditable(true)}
@@ -616,8 +616,8 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
                 </>
             ) : (
                 <>
-                    <h3 className="font-bold text-lg text-regdoc-navy mb-4">Фотографии ТС</h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <h3 className="font-bold text-base sm:text-lg text-regdoc-navy mb-2 sm:mb-4">Фотографии ТС</h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
                         {renderUploadCard("Фото ТС слева", "", "photo_left")}
                         {renderUploadCard("Фото ТС справа", "", "photo_right")}
                         {renderUploadCard("Фото ТС сзади", "", "photo_rear")}
@@ -640,8 +640,8 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
           </div>
         )}
 
-        <div className="mt-8 flex flex-col gap-4">
-          <div className="flex gap-3">
+        <div className="mt-6 sm:mt-8 flex flex-col gap-3 sm:gap-4">
+          <div className="flex gap-2 sm:gap-3">
             {currentStep > 1 && currentStep < 5 && (
               <button onClick={() => {
                   triggerSync();
@@ -649,14 +649,14 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
                       return showAlert("Загрузка файлов", "Пожалуйста, дождитесь окончания загрузки файлов перед переходом на другой этап.", "info");
                   }
                   setCurrentStep(prev => prev - 1);
-              }} className="px-6 py-4 rounded-2xl border border-regdoc-grey font-bold text-regdoc-navy/50 hover:bg-regdoc-grey/40 transition-all">Назад</button>
+              }} className="px-4 sm:px-6 py-3 sm:py-4 rounded-xl sm:rounded-2xl border border-regdoc-grey font-bold text-sm sm:text-base text-regdoc-navy/50 hover:bg-regdoc-grey/40 transition-all">Назад</button>
             )}
 
             {currentStep === 5 && (
-              <button onClick={() => { triggerSync(); setCurrentStep(prev => prev - 1); }} className="px-6 py-4 rounded-2xl border border-regdoc-grey font-bold text-regdoc-navy/50 hover:bg-regdoc-grey/40 transition-all">Назад</button>
+              <button onClick={() => { triggerSync(); setCurrentStep(prev => prev - 1); }} className="px-4 sm:px-6 py-3 sm:py-4 rounded-xl sm:rounded-2xl border border-regdoc-grey font-bold text-sm sm:text-base text-regdoc-navy/50 hover:bg-regdoc-grey/40 transition-all">Назад</button>
             )}
 
-            <button onClick={handleNextStep} disabled={isSubmitting} className="flex-1 py-4 bg-regdoc-cyan text-white font-bold rounded-2xl shadow-lg shadow-regdoc-navy/10 hover:bg-regdoc-teal transition-colors flex items-center justify-center disabled:opacity-60">
+            <button onClick={handleNextStep} disabled={isSubmitting} className="flex-1 py-3 sm:py-4 bg-regdoc-cyan text-white font-bold text-sm sm:text-base rounded-xl sm:rounded-2xl shadow-lg shadow-regdoc-navy/10 hover:bg-regdoc-teal transition-colors flex items-center justify-center disabled:opacity-60">
               {isSubmitting ? <Loader2 className="animate-spin" /> : (currentStep === 5 ? 'Отправить документы' : 'Далее')}
             </button>
           </div>
@@ -693,37 +693,37 @@ function Input({ label, value, onChange, onInput, placeholder, isMono }) {
 
 function UploadCard({ title, desc, files, existing, onUpload, onRemove, fileStatuses, onSimulateUpload, canCopy, isCopied, onToggleCopy }) {
   return (
-    <div className="border border-regdoc-grey rounded-2xl p-4 bg-regdoc-grey/35 h-full flex flex-col">
-      <div className="flex justify-between items-start mb-3">
+    <div className="border border-regdoc-grey rounded-2xl p-2.5 sm:p-4 bg-regdoc-grey/35 h-full flex flex-col">
+      <div className="flex justify-between items-start mb-2 sm:mb-3">
         <div>
-          <div className="font-bold text-regdoc-navy text-sm leading-none">{title}</div>
-          {desc && <div className="text-[10px] text-regdoc-navy/45 uppercase font-bold mt-1 tracking-tight">{desc}</div>}
+          <div className="font-bold text-regdoc-navy text-xs sm:text-sm leading-none">{title}</div>
+          {desc && <div className="text-[9px] sm:text-[10px] text-regdoc-navy/45 uppercase font-bold mt-1 tracking-tight">{desc}</div>}
           
           {canCopy && (
             <div className="mt-2 flex items-center gap-2 cursor-pointer group" onClick={onToggleCopy}>
                 <div className={`w-8 h-4 rounded-full transition-colors flex items-center px-0.5 shrink-0 ${isCopied ? 'bg-regdoc-cyan' : 'bg-regdoc-grey group-hover:bg-regdoc-grey/80'}`}>
                     <div className={`w-3 h-3 rounded-full bg-white shadow-sm transition-transform ${isCopied ? 'translate-x-4' : 'translate-x-0'}`}></div>
                 </div>
-                <div className="text-[9px] font-bold text-regdoc-navy/60 uppercase tracking-wider">Взять из ПЗ</div>
+                <div className="text-[9px] font-bold text-regdoc-navy/60 uppercase tracking-wider truncate">Взять из ПЗ</div>
             </div>
           )}
 
         </div>
         <div className="flex gap-2 shrink-0 ml-2">
-            <label className="bg-white p-2.5 rounded-xl shadow-sm border border-regdoc-grey cursor-pointer text-regdoc-navy/50 hover:text-regdoc-cyan active:scale-95 transition-all"><Paperclip size={20} /><input type="file" multiple className="hidden" onChange={onUpload} accept="image/*,.pdf" /></label>
-            <label className="sm:hidden bg-white p-2.5 rounded-xl shadow-sm border border-regdoc-grey cursor-pointer text-regdoc-cyan active:scale-95 transition-all"><Camera size={20} /><input type="file" className="hidden" onChange={onUpload} accept="image/*" capture="environment" /></label>
+            <label className="bg-white p-2 sm:p-2.5 rounded-xl shadow-sm border border-regdoc-grey cursor-pointer text-regdoc-navy/50 hover:text-regdoc-cyan active:scale-95 transition-all"><Paperclip size={18} className="sm:w-5 sm:h-5" /><input type="file" multiple className="hidden" onChange={onUpload} accept="image/*,.pdf" /></label>
+            <label className="sm:hidden bg-white p-2 rounded-xl shadow-sm border border-regdoc-grey cursor-pointer text-regdoc-cyan active:scale-95 transition-all"><Camera size={18} /><input type="file" className="hidden" onChange={onUpload} accept="image/*" capture="environment" /></label>
         </div>
       </div>
-      <div className="flex flex-wrap gap-2 mt-auto">
+      <div className="flex flex-wrap gap-1.5 sm:gap-2 mt-auto">
         
         {isCopied && (
-             <div className="bg-regdoc-cyan/10 border border-regdoc-cyan/30 p-2 rounded-xl text-[10px] flex items-center gap-1.5 shadow-sm text-regdoc-teal font-bold animate-in zoom-in-95 w-full">
-                 <CheckCircle2 size={14} /> Отмечено для загрузки из ПЗ
+             <div className="bg-regdoc-cyan/10 border border-regdoc-cyan/30 p-2 rounded-xl text-[9px] sm:text-[10px] flex items-center gap-1.5 shadow-sm text-regdoc-teal font-bold animate-in zoom-in-95 w-full">
+                 <CheckCircle2 size={14} /> Отмечено для ПЗ
              </div>
         )}
 
         {existing && existing.map((name, i) => (
-            <div key={i} className="bg-regdoc-mist border border-regdoc-cyan/30 px-2.5 py-1.5 rounded-xl text-[10px] text-regdoc-teal flex items-center gap-1 font-semibold animate-in zoom-in-95">
+            <div key={i} className="bg-regdoc-mist border border-regdoc-cyan/30 px-2 py-1 sm:px-2.5 sm:py-1.5 rounded-xl text-[9px] sm:text-[10px] text-regdoc-teal flex items-center gap-1 font-semibold animate-in zoom-in-95">
                 <Check size={10} strokeWidth={3} /> {name} (В облаке)
             </div>
         ))}
@@ -731,26 +731,25 @@ function UploadCard({ title, desc, files, existing, onUpload, onRemove, fileStat
             const key = f.name + f.size;
             const status = fileStatuses && fileStatuses[key] ? fileStatuses[key] : { state: 'pending', progress: 0 };
             return (
-                <div key={i} className="bg-white border border-regdoc-cyan/25 p-2 rounded-xl text-[10px] flex flex-col gap-1.5 shadow-sm animate-in zoom-in-95 min-w-[140px] flex-1">
-                    <div className="flex items-center justify-between gap-2">
-                        <span className="truncate max-w-[100px] font-medium text-regdoc-navy">{f.name}</span>
-                        {/* ИЗМЕНЕНО: Крупные кнопки, раздвинуты по горизонтали */}
-                        <div className="flex items-center gap-4 sm:gap-5 shrink-0 ml-3">
+                <div key={i} className="bg-white border border-regdoc-cyan/25 p-1.5 sm:p-2 rounded-xl flex flex-col gap-1 sm:gap-1.5 shadow-sm animate-in zoom-in-95 min-w-[120px] sm:min-w-[140px] flex-1">
+                    <div className="flex items-center justify-between gap-1 sm:gap-2">
+                        <span className="truncate max-w-[90px] sm:max-w-[120px] font-medium text-regdoc-navy text-[11px] sm:text-xs">{f.name}</span>
+                        <div className="flex items-center gap-2 sm:gap-4 shrink-0 ml-1 sm:ml-3">
                             {status.state === 'pending' && (
-                                <button onClick={() => onSimulateUpload(f)} className="text-white bg-regdoc-cyan hover:bg-regdoc-teal rounded-xl p-2.5 sm:p-3 transition-all shadow-md active:scale-95" title="Загрузить на сервер">
-                                    <Check size={20} strokeWidth={4} />
+                                <button onClick={() => onSimulateUpload(f)} className="text-white bg-regdoc-cyan hover:bg-regdoc-teal rounded-lg p-2 sm:p-3 transition-all shadow-md active:scale-95 flex items-center justify-center" title="Загрузить на сервер">
+                                    <Check size={16} strokeWidth={4} className="sm:w-5 sm:h-5" />
                                 </button>
                             )}
                             {status.state === 'done' && (
-                                <CheckCircle2 size={24} className="text-regdoc-cyan" />
+                                <CheckCircle2 size={20} className="text-regdoc-cyan sm:w-6 sm:h-6" />
                             )}
                             {status.state !== 'done' && status.state !== 'uploading' && (
-                                <button onClick={() => onRemove(i)} className="text-red-500 hover:text-white bg-red-50 hover:bg-red-500 font-black p-2.5 px-4 sm:p-3 sm:px-5 rounded-xl transition-all text-base shadow-sm active:scale-95" title="Удалить">✕</button>
+                                <button onClick={() => onRemove(i)} className="text-red-500 hover:text-white bg-red-50 hover:bg-red-500 font-black p-1.5 px-3 sm:p-3 sm:px-5 rounded-lg transition-all text-xs sm:text-base shadow-sm active:scale-95 flex items-center justify-center" title="Удалить">✕</button>
                             )}
                         </div>
                     </div>
                     {status.state === 'uploading' && (
-                        <div className="w-full bg-regdoc-grey h-1.5 rounded-full overflow-hidden">
+                        <div className="w-full bg-regdoc-grey h-1 sm:h-1.5 rounded-full overflow-hidden mt-1">
                             <div className="bg-regdoc-cyan h-full transition-all duration-200" style={{ width: `${status.progress}%` }}></div>
                         </div>
                     )}
