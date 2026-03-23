@@ -1,33 +1,120 @@
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dataDir = process.env.USERS_DATA_DIR || path.join(__dirname, '..', 'data');
-const filePath = path.join(dataDir, 'users.json');
+import 'dotenv/config';
+import { createClient } from 'webdav';
+import * as XLSX from 'xlsx';
 
 let queue = Promise.resolve();
 
-function ensureFile() {
-  if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
-  if (!fs.existsSync(filePath)) {
-    fs.writeFileSync(filePath, JSON.stringify({ version: 1, users: [] }, null, 2), 'utf8');
+const USERS_ROOT = '/RegDoc_Заявки/_USERS';
+const USERS_FILE = `${USERS_ROOT}/users.xlsx`;
+
+function getWebdavClient() {
+  return createClient('https://webdav.cloud.mail.ru/', {
+    username: process.env.VK_CLOUD_EMAIL,
+    password: process.env.VK_CLOUD_PASSWORD,
+  });
+}
+
+function defaultStore() {
+  return {
+    version: 1,
+    users: [],
+  };
+}
+
+function normalizeEmail(email) {
+  return String(email || '').trim().toLowerCase();
+}
+
+function coerceBool(v) {
+  if (typeof v === 'boolean') return v;
+  const s = String(v || '').trim().toLowerCase();
+  return s === 'true' || s === '1' || s === 'yes' || s === 'y';
+}
+
+function toNumberOrNull(v) {
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function toStringOrNull(v) {
+  const s = v === undefined || v === null ? '' : String(v);
+  const trimmed = s.trim();
+  return trimmed ? trimmed : null;
+}
+
+function usersFromRows(rows) {
+  return rows
+    .filter((r) => r && (r.id || r.email))
+    .map((r) => ({
+      id: String(r.id || '').trim(),
+      email: normalizeEmail(r.email),
+      passwordHash: String(r.passwordHash || '').trim(),
+      verified: coerceBool(r.verified),
+      verifyToken: toStringOrNull(r.verifyToken),
+      verifyExpires: toNumberOrNull(r.verifyExpires),
+      createdAt: String(r.createdAt || '').trim() || null,
+    }))
+    .filter((u) => u.id && u.email && u.passwordHash);
+}
+
+function storeToSheetData(store) {
+  const header = [
+    'id',
+    'email',
+    'passwordHash',
+    'verified',
+    'verifyToken',
+    'verifyExpires',
+    'createdAt',
+  ];
+
+  const rows = (store.users || []).map((u) => ({
+    id: u.id,
+    email: u.email,
+    passwordHash: u.passwordHash,
+    verified: Boolean(u.verified),
+    verifyToken: u.verifyToken || '',
+    verifyExpires: u.verifyExpires ?? '',
+    createdAt: u.createdAt || '',
+  }));
+
+  return { header, rows };
+}
+
+async function ensureUsersXlsx() {
+  const client = getWebdavClient();
+  if (!(await client.exists(USERS_ROOT))) {
+    await client.createDirectory(USERS_ROOT);
+  }
+  if (!(await client.exists(USERS_FILE))) {
+    const store = defaultStore();
+    const { header, rows } = storeToSheetData(store);
+    const ws = XLSX.utils.json_to_sheet(rows, { header, skipHeader: false });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'users');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    await client.putFileContents(USERS_FILE, buf);
   }
 }
 
-export function loadStore() {
-  ensureFile();
-  const raw = fs.readFileSync(filePath, 'utf8');
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return { version: 1, users: [] };
-  }
+export async function loadStore() {
+  await ensureUsersXlsx();
+  const client = getWebdavClient();
+  const buffer = await client.getFileContents(USERS_FILE);
+  const workbook = XLSX.read(buffer, { type: 'buffer' });
+  const sheetName = workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+  const users = usersFromRows(rows);
+  return { version: 1, users };
 }
 
-function saveStore(store) {
-  ensureFile();
-  fs.writeFileSync(filePath, JSON.stringify(store, null, 2), 'utf8');
+function saveStoreToWebdav(store) {
+  const { header, rows } = storeToSheetData(store);
+  const ws = XLSX.utils.json_to_sheet(rows, { header, skipHeader: false });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'users');
+  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 }
 
 /**
@@ -35,16 +122,26 @@ function saveStore(store) {
  */
 export async function withUsersLock(fn) {
   const run = async () => {
-    const store = loadStore();
-    if (!Array.isArray(store.users)) store.users = [];
-    try {
-      const result = await fn(store);
-      saveStore(store);
-      return result;
-    } catch (e) {
-      throw e;
+    let lastErr = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const store = await loadStore();
+      if (!Array.isArray(store.users)) store.users = [];
+
+      await fn(store);
+
+      const client = getWebdavClient();
+      const buf = saveStoreToWebdav(store);
+      try {
+        await client.putFileContents(USERS_FILE, buf);
+        return true;
+      } catch (e) {
+        lastErr = e;
+        // На следующей попытке снова прочитаем актуальный файл.
+      }
     }
+    throw lastErr || new Error('Не удалось обновить users.xlsx');
   };
+
   const p = queue.then(run, run);
   queue = p.catch(() => {});
   return p;

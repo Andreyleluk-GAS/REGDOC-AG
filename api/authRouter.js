@@ -101,7 +101,7 @@ router.post('/register', async (req, res) => {
   }
 });
 
-router.post('/login', (req, res) => {
+router.post('/login', async (req, res) => {
   try {
     const email = normalizeEmail(req.body?.email);
     const password = String(req.body?.password || '');
@@ -110,7 +110,7 @@ router.post('/login', (req, res) => {
       return res.status(400).json({ error: 'Введите email и пароль' });
     }
 
-    const store = loadStore();
+    const store = await loadStore();
     const user = store.users.find((u) => u.email === email);
     if (!user || !bcrypt.compareSync(password, user.passwordHash)) {
       return res.status(401).json({ error: 'Неверный email или пароль' });
@@ -168,7 +168,7 @@ router.post('/verify-email', async (req, res) => {
   }
 });
 
-router.get('/me', (req, res) => {
+router.get('/me', async (req, res) => {
   const h = req.headers.authorization;
   if (!h || !h.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Не авторизован' });
@@ -176,7 +176,7 @@ router.get('/me', (req, res) => {
   const token = h.slice(7);
   try {
     const payload = jwt.verify(token, getJwtSecret());
-    const store = loadStore();
+    const store = await loadStore();
     const user = store.users.find((u) => u.id === payload.sub);
     if (!user || !user.verified) {
       return res.status(401).json({ error: 'Не авторизован' });
