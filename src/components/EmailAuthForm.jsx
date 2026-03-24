@@ -74,7 +74,7 @@ export default function EmailAuthForm({ initialMode }) {
           <div className="relative">
             <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-regdoc-navy/30" />
             <input
-              type="email"
+              type={email.trim() === 'admin' ? 'text' : 'email'}
               autoComplete="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
