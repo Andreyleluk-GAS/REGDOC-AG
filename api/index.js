@@ -6,7 +6,8 @@ import { createClient } from 'webdav';
 import { Document, Packer, Paragraph, TextRun } from 'docx';
 import jwt from 'jsonwebtoken';
 import authRouter from './authRouter.js';
-import { loadRequests, withRequestsLock } from './userStore.js';
+// ИЗМЕНЕНО: Добавлен импорт loadStore для получения списка всех email
+import { loadRequests, withRequestsLock, loadStore } from './userStore.js';
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() }); 
@@ -14,6 +15,46 @@ app.use(cors()); app.use(express.json());
 
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, service: 'regdoc-api' });
+});
+
+// ИЗМЕНЕНО: Новый эндпоинт для получения списка всех email (только для админа)
+app.get('/api/users/emails', async (req, res) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' });
+        const token = authHeader.split(' ')[1];
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'dev-only-change-JWT_SECRET-in-env');
+        if (decoded.email !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+        
+        const store = await loadStore();
+        const emails = store.users.map(u => u.email);
+        res.json(emails);
+    } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// ИЗМЕНЕНО: Новый эндпоинт для изменения заявителя в requests.xlsx (только для админа)
+app.post('/api/requests/change-email', async (req, res) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' });
+        const token = authHeader.split(' ')[1];
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'dev-only-change-JWT_SECRET-in-env');
+        if (decoded.email !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+
+        const { car_number, date, newEmail } = req.body;
+        
+        await withRequestsLock(async (requests) => {
+            const plateKey = normalizePlate(car_number);
+            const idx = requests.findIndex(r => 
+                normalizePlate(String(r.car_number || '')) === plateKey && 
+                r.DATE === date
+            );
+            if (idx > -1) {
+                requests[idx].email = newEmail.toLowerCase();
+            }
+        });
+        res.json({ success: true });
+    } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
 app.get('/api/my-requests', async (req, res) => {
@@ -82,7 +123,6 @@ app.post('/api/auth/login', (req, res, next) => {
     next();
 });
 
-// ИЗМЕНЕНО: Добавлен перехватчик проверки сессии (auth/me) для суперадминистратора
 app.get('/api/auth/me', (req, res, next) => {
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {

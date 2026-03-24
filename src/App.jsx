@@ -4,7 +4,8 @@ import RegdocLogo from './components/RegdocLogo';
 import RegdocIcon from './components/RegdocIcon';
 import LandingPage from './components/LandingPage';
 import EmailAuthForm from './components/EmailAuthForm';
-import { ShieldCheck, Loader2, FileText, CheckCircle2, AlertTriangle } from 'lucide-react';
+// ИЗМЕНЕНО: Добавлены иконки Edit2 и Check
+import { ShieldCheck, Loader2, FileText, CheckCircle2, AlertTriangle, Edit2, Check } from 'lucide-react';
 import { useAuth } from './context/AuthContext.jsx';
 import { authFetch } from './lib/api.js';
 
@@ -27,6 +28,11 @@ function App() {
   const [editingRequest, setEditingRequest] = useState(null);
   
   const [activeAlert, setActiveAlert] = useState(null);
+
+  // ИЗМЕНЕНО: Состояния для редактирования заявителя
+  const [allEmails, setAllEmails] = useState([]);
+  const [editingEmailReqId, setEditingEmailReqId] = useState(null);
+  const [selectedNewEmail, setSelectedNewEmail] = useState('');
 
   const cta = useMemo(
     () => ({
@@ -86,8 +92,44 @@ function App() {
         })
         .catch(err => console.error(err))
         .finally(() => setLoadingReqs(false));
+        
+      // ИЗМЕНЕНО: Загрузка всех email для выпадающего списка админа
+      if (user.email === 'admin') {
+          authFetch('/api/users/emails')
+              .then(res => res.json())
+              .then(data => { if (Array.isArray(data)) setAllEmails(data); })
+              .catch(err => console.error(err));
+      }
     }
   }, [user, screen]);
+
+  // ИЗМЕНЕНО: Функция сохранения нового заявителя
+  const handleApplyEmailChange = async (req) => {
+      if (!selectedNewEmail || selectedNewEmail === req.email) {
+          setEditingEmailReqId(null);
+          return;
+      }
+      setLoadingReqs(true);
+      try {
+          await authFetch('/api/requests/change-email', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                  car_number: req.car_number,
+                  date: req.DATE,
+                  newEmail: selectedNewEmail
+              })
+          });
+          const res = await authFetch('/api/my-requests');
+          const data = await res.json();
+          if (Array.isArray(data)) setRequests(data);
+      } catch(e) {
+          console.error(e);
+      } finally {
+          setEditingEmailReqId(null);
+          setLoadingReqs(false);
+      }
+  };
 
   const needAuth = screen === 'register' || screen === 'cabinet';
   const showLogin = needAuth && !user && !booting;
@@ -159,7 +201,10 @@ function App() {
           <main className="space-y-4">
             <div className="bg-white rounded-3xl shadow-xl border border-regdoc-grey p-6 sm:p-8">
               <div className="flex items-center justify-between mb-6">
-                <h2 className="text-xl font-bold text-regdoc-navy">Мои заявки</h2>
+                {/* ИЗМЕНЕНО: Заголовок "Все заявки" для админа */}
+                <h2 className="text-xl font-bold text-regdoc-navy">
+                    {user?.email === 'admin' ? 'Все заявки' : 'Мои заявки'}
+                </h2>
                 <button onClick={cta.onRegister} className="px-4 py-2 bg-regdoc-cyan text-white text-xs font-bold rounded-xl hover:bg-regdoc-teal transition-all shadow-md">+ Новая заявка</button>
               </div>
 
@@ -184,10 +229,46 @@ function App() {
                             <div className="text-xl font-black text-regdoc-navy tracking-tight">{formatPlate(req.car_number)}</div>
                             <div className="text-[10px] font-bold text-regdoc-navy/40 uppercase">{req.full_name?.replace(/_/g, ' ')}</div>
                             
-                            {/* ИЗМЕНЕНО: Если суперадминистратор — показываем почту создателя */}
+                            {/* ИЗМЕНЕНО: Блок "Заявитель" с возможностью редактирования */}
                             {user?.email === 'admin' && (
-                                <div className="text-[10px] font-bold text-regdoc-cyan uppercase mt-1">
-                                    Создатель: {req.email}
+                                <div className="text-[10px] font-bold text-regdoc-cyan uppercase mt-1 flex items-center gap-2 flex-wrap">
+                                    <span>Заявитель:</span>
+                                    {editingEmailReqId === req.car_number + req.DATE ? (
+                                        <div className="flex items-center gap-1">
+                                            <select 
+                                                value={selectedNewEmail} 
+                                                onChange={e => setSelectedNewEmail(e.target.value)}
+                                                className="bg-white border border-regdoc-cyan rounded text-[10px] px-1 py-0.5 text-regdoc-navy outline-none"
+                                            >
+                                                <option value="">Выберите email</option>
+                                                {allEmails.map(em => (
+                                                    <option key={em} value={em}>{em}</option>
+                                                ))}
+                                            </select>
+                                            {selectedNewEmail && selectedNewEmail !== req.email && (
+                                                <button onClick={() => handleApplyEmailChange(req)} className="p-0.5 bg-regdoc-cyan text-white rounded hover:bg-regdoc-teal transition-all">
+                                                    <Check size={12} strokeWidth={3} />
+                                                </button>
+                                            )}
+                                            <button onClick={() => setEditingEmailReqId(null)} className="p-0.5 bg-regdoc-grey text-regdoc-navy rounded hover:bg-gray-300 transition-all">
+                                                ✕
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <div className="flex items-center gap-1">
+                                            <span className="text-regdoc-navy">{req.email}</span>
+                                            <button 
+                                                onClick={() => {
+                                                    setEditingEmailReqId(req.car_number + req.DATE);
+                                                    setSelectedNewEmail(req.email);
+                                                }} 
+                                                className="text-regdoc-cyan hover:text-regdoc-teal"
+                                                title="Изменить заявителя"
+                                            >
+                                                <Edit2 size={12} />
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
                             )}
 
