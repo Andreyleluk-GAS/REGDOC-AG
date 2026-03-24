@@ -26,7 +26,6 @@ app.get('/api/my-requests', async (req, res) => {
 
         const allRequests = await loadRequests();
         
-        // ИЗМЕНЕНО: Если это admin, отдаем все заявки. Иначе — только заявки пользователя.
         const userReqs = userEmail === 'admin' 
             ? allRequests 
             : allRequests.filter(r => String(r.email).toLowerCase() === userEmail);
@@ -56,7 +55,6 @@ app.get('/api/my-requests', async (req, res) => {
         if (updates.length > 0) {
             await withRequestsLock(async (requestsToUpdate) => {
                 for (let u of updates) {
-                    // ИЗМЕНЕНО: Для администратора сверяем обновление по почте реального создателя заявки
                     const creatorEmail = String(u.email || '').toLowerCase();
                     const idx = requestsToUpdate.findIndex(mainR => 
                         normalizePlate(String(mainR.car_number || '')) === normalizePlate(String(u.car_number || '')) && 
@@ -75,12 +73,26 @@ app.get('/api/my-requests', async (req, res) => {
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// ИЗМЕНЕНО: Перехватчик для входа суперадминистратора
 app.post('/api/auth/login', (req, res, next) => {
     const { email, password } = req.body;
     if (email === 'admin' && password === 'admin888') {
         const token = jwt.sign({ id: 'admin', email: 'admin' }, process.env.JWT_SECRET || 'dev-only-change-JWT_SECRET-in-env');
         return res.json({ token, user: { id: 'admin', email: 'admin', verified: true } });
+    }
+    next();
+});
+
+// ИЗМЕНЕНО: Добавлен перехватчик проверки сессии (auth/me) для суперадминистратора
+app.get('/api/auth/me', (req, res, next) => {
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+        try {
+            const token = authHeader.split(' ')[1];
+            const decoded = jwt.verify(token, process.env.JWT_SECRET || 'dev-only-change-JWT_SECRET-in-env');
+            if (decoded.email === 'admin') {
+                return res.json({ user: { id: 'admin', email: 'admin', verified: true } });
+            }
+        } catch(e) {}
     }
     next();
 });
