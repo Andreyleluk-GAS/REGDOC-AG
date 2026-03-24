@@ -5,7 +5,7 @@ import RegdocIcon from './components/RegdocIcon';
 import LandingPage from './components/LandingPage';
 import EmailAuthForm from './components/EmailAuthForm';
 // ИЗМЕНЕНО: Добавлены иконки Edit2 и Check
-import { ShieldCheck, Loader2, FileText, CheckCircle2, AlertTriangle, Edit2, Check } from 'lucide-react';
+import { ShieldCheck, Loader2, FileText, CheckCircle2, AlertTriangle, Edit2, Check, Trash2, X } from 'lucide-react';
 import { useAuth } from './context/AuthContext.jsx';
 import { authFetch } from './lib/api.js';
 
@@ -33,6 +33,11 @@ function App() {
   const [allEmails, setAllEmails] = useState([]);
   const [editingEmailReqId, setEditingEmailReqId] = useState(null);
   const [selectedNewEmail, setSelectedNewEmail] = useState('');
+
+  // ИЗМЕНЕНО: ФИО и Удаление для админа
+  const [editingFioReqId, setEditingFioReqId] = useState(null);
+  const [selectedNewFio, setSelectedNewFio] = useState('');
+  const [deletingReq, setDeletingReq] = useState(null);
 
   const cta = useMemo(
     () => ({
@@ -103,6 +108,58 @@ function App() {
     }
   }, [user, screen]);
 
+  const handleApplyFioChange = async (req) => {
+      if (!selectedNewFio || selectedNewFio.trim() === req.full_name?.replace(/_/g, ' ')) {
+          setEditingFioReqId(null);
+          return;
+      }
+      setLoadingReqs(true);
+      try {
+          await authFetch('/api/requests/edit-fio', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                  car_number: req.car_number,
+                  date: req.DATE,
+                  newFio: selectedNewFio.trim()
+              })
+          });
+          const res = await authFetch('/api/my-requests');
+          const data = await res.json();
+          if (Array.isArray(data)) setRequests(data);
+      } catch(e) {
+          console.error(e);
+          alert("Ошибка изменения ФИО");
+      } finally {
+          setEditingFioReqId(null);
+          setLoadingReqs(false);
+      }
+  };
+
+  const confirmDeleteRequest = async () => {
+      if (!deletingReq) return;
+      setLoadingReqs(true);
+      try {
+          await authFetch('/api/requests/delete', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                  car_number: deletingReq.car_number,
+                  date: deletingReq.DATE
+              })
+          });
+          const res = await authFetch('/api/my-requests');
+          const data = await res.json();
+          if (Array.isArray(data)) setRequests(data);
+      } catch(e) {
+          console.error(e);
+          alert("Ошибка удаления заявки");
+      } finally {
+          setDeletingReq(null);
+          setLoadingReqs(false);
+      }
+  };
+
   // ИЗМЕНЕНО: Функция сохранения нового заявителя
   const handleApplyEmailChange = async (req) => {
       if (!selectedNewEmail || selectedNewEmail === req.email) {
@@ -149,10 +206,10 @@ function App() {
     <div className="min-h-screen p-4 sm:p-8 font-sans text-regdoc-navy">
       <div className="max-w-2xl mx-auto space-y-6">
         {screen !== 'landing' && (
-        <header className="mb-2">
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <RegdocLogo />
-            <div className="flex items-center gap-2">
+        <header className="mb-2 sm:mb-4">
+          <div className="flex flex-row items-center justify-between gap-2">
+            <RegdocLogo size="compact" />
+            <div className="flex items-center justify-end gap-2 shrink-0">
               {user && (
                 <span className="text-xs font-medium text-regdoc-navy/55 max-w-[200px] truncate hidden sm:inline">
                   {user.email}
@@ -226,8 +283,51 @@ function App() {
                       <div key={idx} className="p-4 rounded-2xl border border-regdoc-grey bg-regdoc-grey/20">
                         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                           <div className="shrink-0 w-full sm:w-auto">
-                            <div className="text-xl font-black text-regdoc-navy tracking-tight">{formatPlate(req.car_number)}</div>
-                            <div className="text-[10px] font-bold text-regdoc-navy/40 uppercase">{req.full_name?.replace(/_/g, ' ')}</div>
+                            <div className="flex items-start justify-between sm:justify-start gap-4">
+                                <div className="text-xl font-black text-regdoc-navy tracking-tight">{formatPlate(req.car_number)}</div>
+                                {user?.email === 'admin' && (
+                                    <button onClick={() => setDeletingReq(req)} className="text-red-400 hover:text-red-500 transition-colors p-1" title="Удалить заявку">
+                                        <Trash2 size={16} />
+                                    </button>
+                                )}
+                            </div>
+                            
+                            <div className="flex items-center gap-2 mt-1">
+                                {editingFioReqId === req.car_number + req.DATE ? (
+                                    <div className="flex items-center gap-1">
+                                        <input 
+                                            type="text" 
+                                            value={selectedNewFio} 
+                                            onChange={e => setSelectedNewFio(e.target.value)}
+                                            className="bg-white border border-regdoc-cyan rounded text-[10px] px-2 py-0.5 text-regdoc-navy outline-none font-bold uppercase w-32 sm:w-48"
+                                            placeholder="ФИО или Название"
+                                            autoFocus
+                                        />
+                                        <button onClick={() => handleApplyFioChange(req)} className="p-0.5 bg-regdoc-cyan text-white rounded hover:bg-regdoc-teal transition-all shadow-sm">
+                                            <Check size={14} strokeWidth={3} />
+                                        </button>
+                                        <button onClick={() => setEditingFioReqId(null)} className="p-0.5 bg-regdoc-grey text-regdoc-navy rounded hover:bg-gray-300 transition-all shadow-sm">
+                                            <X size={14} />
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <>
+                                        <div className="text-[10px] font-bold text-regdoc-navy/40 uppercase">{req.full_name?.replace(/_/g, ' ')}</div>
+                                        {user?.email === 'admin' && (
+                                            <button 
+                                                onClick={() => {
+                                                    setEditingFioReqId(req.car_number + req.DATE);
+                                                    setSelectedNewFio(req.full_name?.replace(/_/g, ' '));
+                                                }}
+                                                className="text-regdoc-cyan hover:text-regdoc-teal p-0.5"
+                                                title="Изменить ФИО"
+                                            >
+                                                <Edit2 size={12} />
+                                            </button>
+                                        )}
+                                    </>
+                                )}
+                            </div>
                             
                             {/* ИЗМЕНЕНО: Блок "Заявитель" с возможностью редактирования */}
                             {user?.email === 'admin' && (
@@ -324,6 +424,23 @@ function App() {
                   </div>
                 </div>
               )}
+
+              {deletingReq && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 animate-in fade-in">
+                  <div className="bg-white rounded-3xl p-6 sm:p-8 max-w-sm w-full text-center shadow-2xl border border-red-100 animate-in zoom-in-95">
+                    <Trash2 className="w-16 h-16 mx-auto mb-4 sm:mb-6 text-red-500" />
+                    <h3 className="text-lg sm:text-xl font-bold text-regdoc-navy mb-2 sm:mb-3">Удалить заявку?</h3>
+                    <p className="text-xs sm:text-sm text-regdoc-navy/70 mb-6 sm:mb-8 px-2">
+                      Вы уверены, что хотите удалить заявку <strong>{formatPlate(deletingReq.car_number)}</strong> ({deletingReq.full_name?.replace(/_/g, ' ')})?<br/><br/>Это действие сотрет все файлы с сервера без возможности восстановления.
+                    </p>
+                    <div className="flex gap-3">
+                        <button onClick={() => setDeletingReq(null)} className="flex-1 py-2.5 sm:py-3 bg-regdoc-grey text-regdoc-navy font-bold rounded-xl hover:bg-gray-300 transition-all text-sm">Отмена</button>
+                        <button onClick={confirmDeleteRequest} className="flex-1 py-2.5 sm:py-3 bg-red-500 text-white font-bold rounded-xl hover:bg-red-600 transition-all text-sm shadow-md">Удалить</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
             </div>
           </main>
         ) : (
