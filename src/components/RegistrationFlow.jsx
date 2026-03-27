@@ -30,7 +30,7 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
   const [verifiedFiles, setVerifiedFiles] = useState({});
   const [fileComments, setFileComments] = useState({});
   const [fileToDelete, setFileToDelete] = useState(null);
-  const [remarksModal, setRemarksModal] = useState({ show: false, adding: false, newText: '' });
+  const [remarksModal, setRemarksModal] = useState({ show: false, adding: false, newText: '', category: null });
   const [gboOption, setGboOption] = useState('install_propan');
   const [addTsu, setAddTsu] = useState(false);
 
@@ -78,7 +78,7 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
   };
 
   const [files, setFiles] = useState(defaultFiles);
-  const [existingCloudFiles, setExistingCloudFiles] = useState(defaultFiles);
+  const [existingCloudFiles, setExistingCloudFiles] = useState({ pz: defaultFiles, pb: defaultFiles });
   const [fileStatuses, setFileStatuses] = useState({});
 
   const steps = [
@@ -149,8 +149,12 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
                     if (data.found) {
                         setActiveFolderName(data.folderName);
                         const targetDocType = editingRequest.targetDocType || 'pz';
-                        const specificFiles = targetDocType === 'pz' ? data.existingFiles_PZ : data.existingFiles_PB;
-                        if (specificFiles) setExistingCloudFiles({...defaultFiles, ...specificFiles});
+                        if (data.existingFiles_PZ || data.existingFiles_PB) {
+                            setExistingCloudFiles({
+                                pz: {...defaultFiles, ...(targetDocType === 'pz' ? data.existingFiles_PZ : data.pzFiles)},
+                                pb: {...defaultFiles, ...data.existingFiles_PB}
+                            });
+                        }
                         
                         if (data.pzFiles) {
                             setAvailablePzFiles({
@@ -196,7 +200,7 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
         setSelectedPzCopies({});
         setFormData({ fullName: '', companyName: '', licensePlate: '', conversionType: 'На транспортное средство предполагается установка комплекта газобаллонного оборудования для питания двигателя природным газом (пропан).' });
         setFiles(defaultFiles);
-        setExistingCloudFiles(defaultFiles);
+        setExistingCloudFiles({ pz: defaultFiles, pb: defaultFiles });
         setGboOption('install_propan');
         setAddTsu(false);
     }
@@ -228,7 +232,7 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
 
       // Проверяем: у всех ли категорий есть файлы и все ли они проверены
       const allOk = currentCategories.every(cat => {
-          const catFiles = existingCloudFiles[cat] || [];
+          const catFiles = existingCloudFiles[docType][cat] || [];
           if (catFiles.length === 0) return false; // обязательное поле пусто - раздел не готов
           return catFiles.every(fname => verifiedFiles[docType]?.[fname] === true);
       });
@@ -266,12 +270,15 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ id: reqId, docType, filename })
           });
-          if (res.ok) {
-              setExistingCloudFiles(prev => ({
-                  ...prev,
-                  [category]: prev[category].filter(f => f !== filename)
-              }));
-          }
+           if (res.ok) {
+               setExistingCloudFiles(prev => ({
+                   ...prev,
+                   [docType]: {
+                       ...prev[docType],
+                       [category]: prev[docType][category].filter(f => f !== filename)
+                   }
+               }));
+           }
       } catch (e) {
           console.error('Delete failed:', e);
       }
@@ -310,7 +317,21 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
 
       xhr.onload = () => {
           if (xhr.status === 200) {
-              setFileStatuses(prev => ({ ...prev, [key]: { state: 'done', progress: 100 } }));
+          // Обновляем список файлов в облаке для текущего docType
+          setExistingCloudFiles(prev => {
+              const currentCatFiles = prev[docType][category] || [];
+              const ext = file.name.split('.').pop().toLowerCase();
+              // Временное имя для UI до рефреша
+              const tempName = `${category.toUpperCase()}_${currentCatFiles.length + 1}.${ext}`;
+              return {
+                  ...prev,
+                  [docType]: {
+                      ...prev[docType],
+                      [category]: [...currentCatFiles, tempName]
+                  }
+              };
+          });
+          setFileStatuses(prev => ({ ...prev, [key]: { state: 'done', progress: 100 } }));
           } else {
               setFileStatuses(prev => ({ ...prev, [key]: { state: 'error', progress: 0 } }));
               showAlert("Ошибка", "Не удалось загрузить файл " + file.name, "error");
@@ -473,10 +494,10 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
       }
   };
 
-  const renderUploadCard = (title, desc, category) => {
-      const existing = existingCloudFiles[category] || [];
-      const canCopy = docType === 'pb' && availablePzFiles[category] && existing.length === 0;
-      const isCopied = selectedPzCopies[category] || false;
+   const renderUploadCard = (title, desc, category) => {
+       const existing = existingCloudFiles[docType][category] || [];
+       const canCopy = docType === 'pb' && availablePzFiles[category] && existing.length === 0;
+       const isCopied = selectedPzCopies[category] || false;
       return (
           <UploadCard 
               key={category}
@@ -498,6 +519,8 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
               onSaveVerify={saveVerificationFile}
               onDeleteExisting={(fname) => requestDeleteFile(category, fname)}
               onViewFile={(fname) => openFile(fname)}
+              categoryRemarks={fileComments[docType]?.[`@category_${category}`]}
+              onOpenCategoryRemarks={() => setRemarksModal({ show: true, adding: false, newText: '', category: category })}
           />
       );
   };
@@ -507,7 +530,8 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
       const reqId = editingRequest?.ID;
       if (!reqId) return;
 
-      const history = Array.isArray(fileComments[docType]?.general?.comment) ? fileComments[docType].general.comment : [];
+      const filename = remarksModal.category ? `@category_${remarksModal.category}` : 'general';
+      const history = Array.isArray(fileComments[docType]?.[filename]?.comment) ? fileComments[docType][filename].comment : [];
       
       const newHistory = [...history, {
           date: new Date().toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }),
@@ -518,7 +542,7 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
       const payload = {
           id: reqId,
           docType,
-          filename: 'general',
+          filename: filename,
           comment: newHistory,
           status: 'needs_fix'
       };
@@ -534,23 +558,24 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
                   ...prev,
                   [docType]: {
                       ...(prev[docType] || {}),
-                      'general': {
-                          ...((prev[docType] || {})['general'] || {}),
+                      [filename]: {
+                          ...((prev[docType] || {})[filename] || {}),
                           ...payload,
                           expertUnread: false
                       }
                   }
               }));
-              setRemarksModal({ show: true, adding: false, newText: '' });
+              setRemarksModal({ ...remarksModal, adding: false, newText: '' });
           }
       } catch (e) {
           console.error('Save remark failed:', e);
       }
   };
 
-  const toggleResolveRemark = async (index) => {
+  const toggleResolveRemark = async (index, category = null) => {
       const isAdmin = user?.email === 'admin';
-      const history = Array.isArray(fileComments[docType]?.general?.comment) ? [...fileComments[docType].general.comment] : [];
+      const filename = category ? `@category_${category}` : 'general';
+      const history = Array.isArray(fileComments[docType]?.[filename]?.comment) ? [...fileComments[docType][filename].comment] : [];
       if (!history[index]) return;
       
       history[index] = { ...history[index], resolved: !history[index].resolved };
@@ -558,7 +583,7 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
       const payload = {
           id: editingRequest?.ID,
           docType,
-          filename: 'general',
+          filename: filename,
           comment: history,
           status: 'needs_fix'
       };
@@ -579,8 +604,8 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
                   ...prev,
                   [docType]: {
                       ...(prev[docType] || {}),
-                      'general': {
-                          ...((prev[docType] || {})['general'] || {}),
+                      [filename]: {
+                          ...((prev[docType] || {})[filename] || {}),
                           ...payload,
                           expertUnread: !isAdmin
                       }
@@ -604,27 +629,31 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
             </div>
 
             <div className="overflow-y-auto flex-1 mb-6 space-y-3 pr-1 minimal-scrollbar">
-                {Array.isArray(fileComments[docType]?.general?.comment) && fileComments[docType].general.comment.length > 0 ? (
-                    fileComments[docType].general.comment.map((r, i) => (
-                        <div key={i} className={`p-4 rounded-2xl border shadow-sm animate-in slide-in-from-bottom-2 ${r.resolved ? 'bg-regdoc-mist border-regdoc-cyan/30' : 'bg-red-50 border-red-100'}`}>
-                            <div className={`text-[10px] font-bold mb-1.5 flex justify-between items-center uppercase tracking-widest ${r.resolved ? 'text-regdoc-teal' : 'text-red-400'}`}>
-                                <span>Замечание №{i+1}</span>
-                                <div className="flex items-center gap-2 pl-2">
-                                    <span className="hidden sm:inline">{r.date}</span>
-                                    <span className="sm:hidden text-[8px]">{r.date.split(',')[0]}</span>
-                                    <label className={`flex items-center gap-1 cursor-pointer select-none ml-1 sm:ml-2 px-2 py-1 rounded-full transition-all ${r.resolved ? 'bg-regdoc-teal text-white' : 'bg-white border text-red-500 border-red-200 hover:bg-red-100'}`}>
-                                        <input type="checkbox" checked={!!r.resolved} onChange={() => toggleResolveRemark(i)} className="hidden" />
-                                        <Check size={12} strokeWidth={3}/>
-                                        <span className="text-[9px]">{r.resolved ? 'Отработано' : 'Устранить'}</span>
-                                    </label>
+                {(() => {
+                    const filename = remarksModal.category ? `@category_${remarksModal.category}` : 'general';
+                    const history = Array.isArray(fileComments[docType]?.[filename]?.comment) ? fileComments[docType][filename].comment : [];
+                    
+                    if (history.length > 0) {
+                        return history.map((r, i) => (
+                            <div key={i} className={`p-4 rounded-2xl border shadow-sm animate-in slide-in-from-bottom-2 ${r.resolved ? 'bg-regdoc-mist border-regdoc-cyan/30' : 'bg-red-50 border-red-100'}`}>
+                                <div className={`text-[10px] font-bold mb-1.5 flex justify-between items-center uppercase tracking-widest ${r.resolved ? 'text-regdoc-teal' : 'text-red-400'}`}>
+                                    <span>Замечание №{i+1}</span>
+                                    <div className="flex items-center gap-2 pl-2">
+                                        <span className="hidden sm:inline">{r.date}</span>
+                                        <span className="sm:hidden text-[8px]">{r.date.split(',')[0]}</span>
+                                        <label className={`flex items-center gap-1 cursor-pointer select-none ml-1 sm:ml-2 px-2 py-1 rounded-full transition-all ${r.resolved ? 'bg-regdoc-teal text-white' : 'bg-white border text-red-500 border-red-200 hover:bg-red-100'}`}>
+                                            <input type="checkbox" checked={!!r.resolved} onChange={() => toggleResolveRemark(i, remarksModal.category)} className="hidden" />
+                                            <Check size={12} strokeWidth={3}/>
+                                            <span className="text-[9px]">{r.resolved ? 'Отработано' : 'Устранить'}</span>
+                                        </label>
+                                    </div>
                                 </div>
+                                <p className={`text-sm font-bold whitespace-pre-wrap leading-relaxed mt-2 ${r.resolved ? 'text-regdoc-navy/60 line-through decoration-regdoc-teal/40 opacity-80' : 'text-red-600'}`}>{r.text}</p>
                             </div>
-                            <p className={`text-sm font-bold whitespace-pre-wrap leading-relaxed mt-2 ${r.resolved ? 'text-regdoc-navy/60 line-through decoration-regdoc-teal/40 opacity-80' : 'text-red-600'}`}>{r.text}</p>
-                        </div>
-                    ))
-                ) : (
-                    <div className="text-center p-6 text-regdoc-navy/40 font-bold text-sm bg-regdoc-grey/30 rounded-2xl border border-dashed border-regdoc-grey">Замечаний от эксперта пока нет.</div>
-                )}
+                        ));
+                    }
+                    return <div className="text-center p-6 text-regdoc-navy/40 font-bold text-sm bg-regdoc-grey/30 rounded-2xl border border-dashed border-regdoc-grey">Замечаний от эксперта пока нет.</div>;
+                })()}
             </div>
 
             <div className="shrink-0 mt-auto">
@@ -737,7 +766,7 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
 
                     return (
                         <button 
-                            onClick={() => setRemarksModal({ show: true, adding: false, newText: '' })} 
+                            onClick={() => setRemarksModal({ show: true, adding: false, newText: '', category: null })} 
                             className={`flex flex-col items-center gap-1 sm:gap-1.5 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl font-bold text-[10px] sm:text-[11px] transition-all tracking-wider shadow-sm uppercase outline-none shrink-0 ${btnClass}`}
                         >
                             <div className="flex items-center gap-2">
@@ -1005,18 +1034,18 @@ function UploadCard({ title, desc, category, files, existing, onUpload, onRemove
 
         </div>
         <div className="flex gap-2 shrink-0 ml-2">
-            {(isAdmin || fileComments?.[`@category_${category}`]) && onOpenChat && (
+            {(isAdmin || fileComments?.[docType]?.[`@category_${category}`]) && (
                 <button 
-                  onClick={() => onOpenChat(category, true)} 
+                  onClick={() => setRemarksModal({ show: true, adding: false, newText: '', category: category })} 
                   className={`p-2 sm:p-2.5 rounded-xl shadow-sm border ${
-                      fileComments?.[`@category_${category}`]?.status === 'needs_fix' 
+                      fileComments?.[docType]?.[`@category_${category}`]?.status === 'needs_fix' 
                       ? 'bg-amber-100 border-amber-400 text-amber-600 hover:bg-amber-200' 
                       : 'bg-white border-regdoc-grey text-regdoc-navy/50 hover:text-regdoc-cyan'
                   } active:scale-95 transition-all relative outline-none`}
                   title="Замечания к этому разделу документов"
                 >
                     <MessageCircle size={18} className="sm:w-5 sm:h-5" />
-                    {((fileComments?.[`@category_${category}`]?.expertUnread && isAdmin) || (fileComments?.[`@category_${category}`]?.status === 'needs_fix' && !fileComments?.[`@category_${category}`]?.userReply && !isAdmin)) && (
+                    {((fileComments?.[docType]?.[`@category_${category}`]?.expertUnread && isAdmin) || (fileComments?.[docType]?.[`@category_${category}`]?.status === 'needs_fix' && !fileComments?.[docType]?.[`@category_${category}`]?.userReply && !isAdmin)) && (
                         <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse border-2 border-white shadow-sm"></span>
                     )}
                 </button>
