@@ -202,7 +202,8 @@ function App() {
               {screen === 'register' && (
                 <button
                   type="button"
-                  onClick={() => {
+                  onClick={async () => {
+                    await reloadRequests();
                     if (requests.length > 0) cta.onCabinet();
                     else showToast('У вас еще нет заявок', 'error');
                   }}

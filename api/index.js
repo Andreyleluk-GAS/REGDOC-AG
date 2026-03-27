@@ -489,7 +489,7 @@ app.get('/api/check-plate', async (req, res) => {
             const match = folder.basename.match(/\[.*?\]\[(.*?)\]\[.*?\]/);
             const extractedName = match ? match[1].replace(/_/g, ' ') : "Клиент";
             
-            const existingFiles = {
+            const generateEmptyMap = () => ({
                 passport: [], snils: [], sts: [], pts: [], egrn: [],
                 balloon_passport: [], act_opresovki: [], cert_gbo: [], cert_balloon: [],
                 pte: [], zd: [], form207: [], gibdd_zayavlenie: [],
@@ -497,8 +497,10 @@ app.get('/api/check-plate', async (req, res) => {
                 photo_hood: [], photo_vin: [], photo_kuzov: [], photo_tablichka: [],
                 photo_balloon_place: [], photo_balloon_tablichka: [], photo_vent: [],
                 photo_mult: [], photo_reduktor: [], photo_ebu: [], photo_forsunki: [], photo_vzu: []
-            };
+            });
 
+            const existingFiles_PZ = generateEmptyMap();
+            const existingFiles_PB = generateEmptyMap();
             const pzFilesMap = { passport: [], snils: [], sts: [], pts: [], egrn: [] };
 
             const ruToEnMap = {
@@ -521,6 +523,7 @@ app.get('/api/check-plate', async (req, res) => {
                 const subPath = `${folder.filename}/${sub}`;
                 if (await client.exists(subPath)) {
                     const contents = await client.getDirectoryContents(subPath);
+                    const targetMap = sub === 'Для ПЗ' ? existingFiles_PZ : existingFiles_PB;
                     contents.forEach(file => {
                         if (file.type === 'file') {
                             if (file.basename.toLowerCase() === 'описание.docx') {
@@ -529,7 +532,7 @@ app.get('/api/check-plate', async (req, res) => {
                                 const name = file.basename.toUpperCase();
                                 for (const [ru, en] of Object.entries(ruToEnMap)) {
                                     if (name.startsWith(ru + '_')) {
-                                        existingFiles[en].push(file.basename);
+                                        targetMap[en].push(file.basename);
                                         if (sub === 'Для ПЗ' && pzFilesMap[en] !== undefined) {
                                             pzFilesMap[en].push(file.basename);
                                         }
@@ -544,7 +547,9 @@ app.get('/api/check-plate', async (req, res) => {
             return res.json({ 
                 found: true, 
                 fullName: extractedName, 
-                existingFiles, 
+                existingFiles_PZ,
+                existingFiles_PB,
+                existingFiles: existingFiles_PZ, // default fallback
                 pzFiles: pzFilesMap, 
                 hasDescription, 
                 folderName: folder.basename,

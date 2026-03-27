@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Check, ChevronRight, User, Briefcase, FileSignature, FileCheck2, Camera, Paperclip, Loader2, FileText, CheckCircle2, Save, RotateCw, History, PlusCircle, AlertCircle, Info, XCircle, MessageCircle, X } from 'lucide-react';
+import { Check, ChevronRight, User, Briefcase, FileSignature, FileCheck2, Camera, Paperclip, Loader2, FileText, CheckCircle2, Save, RotateCw, History, PlusCircle, AlertCircle, Info, XCircle, MessageCircle, X, Trash2 } from 'lucide-react';
 import imageCompression from 'browser-image-compression';
 import { authFetch } from '../lib/api.js';
 import { formatFIO } from '../lib/formatters.js';
@@ -29,7 +29,8 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
   const [formData, setFormData] = useState({ fullName: '', companyName: '', licensePlate: '', conversionType: 'На транспортное средство предполагается установка комплекта газобаллонного оборудования для питания двигателя природным газом (пропан).' });
   const [verifiedFiles, setVerifiedFiles] = useState({});
   const [fileComments, setFileComments] = useState({});
-  const [chatModal, setChatModal] = useState({ show: false, filename: '', dbKey: '', category: '', comment: '', status: '', userReply: '' });
+  const [fileToDelete, setFileToDelete] = useState(null);
+  const [remarksModal, setRemarksModal] = useState({ show: false, adding: false, newText: '' });
   const [gboOption, setGboOption] = useState('install_propan');
   const [addTsu, setAddTsu] = useState(false);
 
@@ -147,7 +148,9 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
                 .then(data => {
                     if (data.found) {
                         setActiveFolderName(data.folderName);
-                        if (data.existingFiles) setExistingCloudFiles({...defaultFiles, ...data.existingFiles});
+                        const targetDocType = editingRequest.targetDocType || 'pz';
+                        const specificFiles = targetDocType === 'pz' ? data.existingFiles_PZ : data.existingFiles_PB;
+                        if (specificFiles) setExistingCloudFiles({...defaultFiles, ...specificFiles});
                         
                         if (data.pzFiles) {
                             setAvailablePzFiles({
@@ -247,10 +250,15 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
       }
   };
 
-  const deleteFileOnServer = async (category, filename) => {
-      if (!window.confirm(`Удалить файл ${filename}?`)) return;
+  const requestDeleteFile = (category, filename) => {
+      setFileToDelete({ category, filename });
+  };
+
+  const confirmDeleteFileOnServer = async () => {
+      if (!fileToDelete) return;
+      const { category, filename } = fileToDelete;
       const reqId = editingRequest?.ID;
-      if (!reqId) return;
+      if (!reqId) { setFileToDelete(null); return; }
 
       try {
           const res = await authFetch('/api/requests/delete-file', {
@@ -267,6 +275,7 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
       } catch (e) {
           console.error('Delete failed:', e);
       }
+      setFileToDelete(null);
   };
 
   const openFile = (filename) => {
@@ -487,34 +496,76 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
               verifiedFiles={verifiedFiles[docType] || {}}
               onToggleVerify={toggleVerifyFile}
               onSaveVerify={saveVerificationFile}
-              onDeleteExisting={(fname) => deleteFileOnServer(category, fname)}
+              onDeleteExisting={(fname) => requestDeleteFile(category, fname)}
               onViewFile={(fname) => openFile(fname)}
-              fileComments={fileComments[docType] || {}}
-              onOpenChat={(fname, isCategory) => {
-                  const dbKey = isCategory ? `@category_${category}` : fname;
-                  const data = (fileComments[docType] || {})[dbKey] || {};
-                  setChatModal({ show: true, dbKey, filename: isCategory ? `Раздел: ${title}` : fname, category, comment: data.comment || '', status: data.status || 'verified', userReply: data.userReply || '' });
-              }}
           />
       );
   };
 
-  const saveFileComment = async () => {
+  const saveNewRemark = async () => {
+      if (!remarksModal.newText.trim()) return;
       const reqId = editingRequest?.ID;
-      if (!reqId || !chatModal.dbKey) return;
+      if (!reqId) return;
 
-      const isAdmin = user?.email === 'admin';
+      const history = Array.isArray(fileComments[docType]?.general?.comment) ? fileComments[docType].general.comment : [];
+      
+      const newHistory = [...history, {
+          date: new Date().toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }),
+          text: remarksModal.newText.trim(),
+          resolved: false
+      }];
+
       const payload = {
           id: reqId,
           docType,
-          filename: chatModal.dbKey,
+          filename: 'general',
+          comment: newHistory,
+          status: 'needs_fix'
       };
 
-      if (isAdmin) {
-          payload.status = chatModal.status;
-          payload.comment = chatModal.comment;
-      } else {
-          payload.userReply = chatModal.userReply;
+      try {
+          const res = await authFetch('/api/requests/file-comment', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+          });
+          if (res.ok) {
+              setFileComments(prev => ({
+                  ...prev,
+                  [docType]: {
+                      ...(prev[docType] || {}),
+                      'general': {
+                          ...((prev[docType] || {})['general'] || {}),
+                          ...payload,
+                          expertUnread: false
+                      }
+                  }
+              }));
+              setRemarksModal({ show: true, adding: false, newText: '' });
+          }
+      } catch (e) {
+          console.error('Save remark failed:', e);
+      }
+  };
+
+  const toggleResolveRemark = async (index) => {
+      const isAdmin = user?.email === 'admin';
+      const history = Array.isArray(fileComments[docType]?.general?.comment) ? [...fileComments[docType].general.comment] : [];
+      if (!history[index]) return;
+      
+      history[index] = { ...history[index], resolved: !history[index].resolved };
+
+      const payload = {
+          id: editingRequest?.ID,
+          docType,
+          filename: 'general',
+          comment: history,
+          status: 'needs_fix'
+      };
+
+      const resolvedCount = history.filter(h => h.resolved).length;
+      if (!isAdmin) {
+          payload.userReply = `Устранено: ${resolvedCount}`;
       }
 
       try {
@@ -528,72 +579,77 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
                   ...prev,
                   [docType]: {
                       ...(prev[docType] || {}),
-                      [chatModal.dbKey]: {
-                          ...((prev[docType] || {})[chatModal.dbKey] || {}),
+                      'general': {
+                          ...((prev[docType] || {})['general'] || {}),
                           ...payload,
                           expertUnread: !isAdmin
                       }
                   }
               }));
-              setChatModal({ ...chatModal, show: false });
           }
-      } catch (e) {
-          console.error('Save comment failed:', e);
+      } catch(e) {
+          console.error('Toggle resolve failed:', e);
       }
   };
 
   return (
     <div className="bg-white rounded-3xl shadow-xl border border-regdoc-grey overflow-hidden max-w-2xl mx-auto relative min-h-[500px]">
 
-      {chatModal.show && (
+      {remarksModal.show && (
         <div className="absolute inset-0 bg-regdoc-navy/80 backdrop-blur-sm z-[250] flex items-center justify-center p-4 animate-in fade-in zoom-in-95 duration-200">
-          <div className="bg-white rounded-[32px] p-6 sm:p-8 w-full max-w-md shadow-2xl flex flex-col gap-4 border border-regdoc-grey">
-            <div className="flex justify-between items-center mb-2">
-                <div>
-                    <h3 className="text-xl font-bold text-regdoc-navy leading-none">Комментарии к файлу</h3>
-                    <p className="text-[10px] sm:text-xs font-bold text-regdoc-navy/40 uppercase mt-1 tracking-wider truncate max-w-[200px]">{chatModal.filename}</p>
-                </div>
-                <button onClick={() => setChatModal({...chatModal, show: false})} className="p-2 bg-regdoc-grey/40 text-regdoc-navy/60 hover:bg-regdoc-grey hover:text-regdoc-navy rounded-xl transition-all"><X size={20}/></button>
+          <div className="bg-white rounded-[32px] p-6 sm:p-8 w-full max-w-md shadow-2xl flex flex-col border border-regdoc-grey max-h-[90vh]">
+            <div className="flex justify-between items-center mb-6 shrink-0">
+                <h3 className="text-xl font-bold text-regdoc-navy leading-none flex items-center gap-2"><MessageCircle size={22} className="text-regdoc-cyan"/> Замечания по разделу</h3>
+                <button onClick={() => setRemarksModal({...remarksModal, show: false})} className="p-2 bg-regdoc-grey/40 text-regdoc-navy/60 hover:bg-regdoc-grey hover:text-regdoc-navy rounded-xl transition-all"><X size={20}/></button>
             </div>
 
-            {user?.email === 'admin' ? (
-                <>
-                    <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold text-regdoc-navy/50 uppercase ml-1">Статус файла</label>
-                        <select className="w-full p-3 bg-regdoc-grey/40 border border-regdoc-grey rounded-2xl outline-none focus:border-regdoc-cyan text-sm font-bold text-regdoc-navy" value={chatModal.status} onChange={e => setChatModal({...chatModal, status: e.target.value})}>
-                            <option value="verified">ОК (проверено)</option>
-                            <option value="needs_fix">Требует исправления</option>
-                        </select>
-                    </div>
-                    <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold text-regdoc-navy/50 uppercase ml-1">Сообщение пользователю</label>
-                        <textarea className="w-full p-4 bg-regdoc-grey/40 border border-regdoc-grey rounded-2xl outline-none focus:border-regdoc-cyan transition-all text-sm h-28 resize-none" placeholder="Загрузите разворот паспорта с пропиской..." value={chatModal.comment} onChange={e => setChatModal({...chatModal, comment: e.target.value})}></textarea>
-                    </div>
-                    {chatModal.userReply && (
-                        <div className="bg-regdoc-mist p-4 rounded-2xl border border-regdoc-cyan/30 mt-2">
-                            <label className="text-[10px] font-bold text-regdoc-cyan uppercase block mb-1">Ответ пользователя:</label>
-                            <p className="text-sm text-regdoc-navy font-medium italic">{chatModal.userReply}</p>
+            <div className="overflow-y-auto flex-1 mb-6 space-y-3 pr-1 minimal-scrollbar">
+                {Array.isArray(fileComments[docType]?.general?.comment) && fileComments[docType].general.comment.length > 0 ? (
+                    fileComments[docType].general.comment.map((r, i) => (
+                        <div key={i} className={`p-4 rounded-2xl border shadow-sm animate-in slide-in-from-bottom-2 ${r.resolved ? 'bg-regdoc-mist border-regdoc-cyan/30' : 'bg-red-50 border-red-100'}`}>
+                            <div className={`text-[10px] font-bold mb-1.5 flex justify-between items-center uppercase tracking-widest ${r.resolved ? 'text-regdoc-teal' : 'text-red-400'}`}>
+                                <span>Замечание №{i+1}</span>
+                                <div className="flex items-center gap-2 pl-2">
+                                    <span className="hidden sm:inline">{r.date}</span>
+                                    <span className="sm:hidden text-[8px]">{r.date.split(',')[0]}</span>
+                                    <label className={`flex items-center gap-1 cursor-pointer select-none ml-1 sm:ml-2 px-2 py-1 rounded-full transition-all ${r.resolved ? 'bg-regdoc-teal text-white' : 'bg-white border text-red-500 border-red-200 hover:bg-red-100'}`}>
+                                        <input type="checkbox" checked={!!r.resolved} onChange={() => toggleResolveRemark(i)} className="hidden" />
+                                        <Check size={12} strokeWidth={3}/>
+                                        <span className="text-[9px]">{r.resolved ? 'Отработано' : 'Устранить'}</span>
+                                    </label>
+                                </div>
+                            </div>
+                            <p className={`text-sm font-bold whitespace-pre-wrap leading-relaxed mt-2 ${r.resolved ? 'text-regdoc-navy/60 line-through decoration-regdoc-teal/40 opacity-80' : 'text-red-600'}`}>{r.text}</p>
                         </div>
-                    )}
-                </>
-            ) : (
-                <>
-                    {chatModal.comment ? (
-                        <div className="bg-red-50 p-4 rounded-2xl border border-red-100">
-                            <label className="text-[10px] font-bold text-red-500 uppercase block mb-1 flex items-center gap-1"><AlertCircle size={12}/> Замечание эксперта:</label>
-                            <p className="text-sm text-red-600 font-bold">{chatModal.comment}</p>
+                    ))
+                ) : (
+                    <div className="text-center p-6 text-regdoc-navy/40 font-bold text-sm bg-regdoc-grey/30 rounded-2xl border border-dashed border-regdoc-grey">Замечаний от эксперта пока нет.</div>
+                )}
+            </div>
+
+            <div className="shrink-0 mt-auto">
+                {user?.email === 'admin' ? (
+                    remarksModal.adding ? (
+                        <div className="bg-white p-3 sm:p-4 rounded-2xl border border-regdoc-cyan shadow-sm flex flex-col gap-3 animate-in fade-in">
+                            <textarea 
+                                className="w-full p-3 bg-regdoc-mist/30 border border-regdoc-grey rounded-xl outline-none focus:border-regdoc-cyan focus:bg-white text-sm h-28 resize-none font-medium text-regdoc-navy transition-all" 
+                                placeholder="Новое замечание..."
+                                value={remarksModal.newText}
+                                onChange={e => setRemarksModal({...remarksModal, newText: e.target.value})}
+                                autoFocus
+                            />
+                            <div className="flex gap-2">
+                                <button onClick={() => setRemarksModal({...remarksModal, adding: false, newText: ''})} className="flex-1 py-3 bg-regdoc-grey text-regdoc-navy/60 hover:text-regdoc-navy font-bold rounded-xl text-sm transition-all outline-none">Отмена</button>
+                                <button onClick={saveNewRemark} className="flex-1 py-3 bg-regdoc-cyan text-white font-bold rounded-xl text-sm shadow-md hover:bg-regdoc-teal transition-all outline-none">Сохранить</button>
+                            </div>
                         </div>
                     ) : (
-                        <div className="text-center py-4 bg-gray-50 text-gray-400 text-sm font-medium border border-dashed rounded-xl border-gray-200">Замечаний от эксперта пока нет.</div>
-                    )}
-                    <div className="space-y-1.5 mt-2">
-                        <label className="text-[10px] font-bold text-regdoc-navy/50 uppercase ml-1">Ваш ответ</label>
-                        <textarea className="w-full p-4 bg-regdoc-grey/40 border border-regdoc-grey rounded-2xl outline-none focus:border-regdoc-cyan transition-all text-sm h-24 resize-none" placeholder="Файл пересдан, проверьте пожалуйста." value={chatModal.userReply} onChange={e => setChatModal({...chatModal, userReply: e.target.value})}></textarea>
-                    </div>
-                </>
-            )}
-
-            <button onClick={saveFileComment} className="w-full py-3.5 bg-regdoc-cyan text-white font-bold rounded-2xl hover:bg-regdoc-teal transition-all shadow-md mt-2">Сохранить</button>
+                        <button onClick={() => setRemarksModal({...remarksModal, adding: true})} className="w-full py-4 bg-red-50 text-red-500 font-bold rounded-2xl border border-red-200 hover:bg-red-100 hover:text-red-600 transition-all outline-none flex items-center justify-center gap-2">
+                            <PlusCircle size={18} strokeWidth={2.5}/> Добавить замечание
+                        </button>
+                    )
+                ) : null}
+            </div>
           </div>
         </div>
       )}
@@ -661,12 +717,40 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
       <div className="p-4 sm:p-8">
         
         {currentStep >= 3 && (
-            <div className="bg-regdoc-mist/40 border border-regdoc-cyan/20 rounded-2xl p-3 sm:p-4 mb-4 sm:mb-6 animate-in slide-in-from-top-2">
-                <div className="text-[10px] sm:text-[11px] font-bold text-regdoc-navy/45 uppercase tracking-wider mb-1">
-                    {docType === 'pz' ? 'Заявка на Предварительное заключение' : 'Заявка на Протокол безопасности'}
+            <div className="bg-regdoc-mist/30 border border-regdoc-cyan/20 rounded-2xl p-4 sm:p-5 mb-5 sm:mb-6 flex flex-col sm:flex-row justify-between items-start gap-4">
+                <div>
+                    <div className="text-[10px] sm:text-[11px] font-bold text-regdoc-navy/45 uppercase tracking-wider mb-1 sm:mb-1.5">
+                        {docType === 'pz' ? 'Заявка на Предварительное заключение' : 'Заявка на Протокол безопасности'}
+                    </div>
+                    <div className="font-bold text-regdoc-navy text-sm sm:text-base leading-tight">Гос. номер: <span className="text-regdoc-cyan tracking-wider">{formData.licensePlate}</span></div>
+                    <div className="text-[11px] sm:text-xs text-regdoc-navy/70 leading-tight mt-1">ФИО: {formData.fullName || 'Не указано'}</div>
                 </div>
-                <div className="font-bold text-regdoc-navy text-sm sm:text-base">Гос. номер: <span className="text-regdoc-cyan tracking-wider">{formData.licensePlate}</span></div>
-                <div className="text-[11px] sm:text-xs text-regdoc-navy/70 leading-tight mt-0.5">ФИО: {formData.fullName || 'Не указано'}</div>
+                {(user?.email === 'admin' || (Array.isArray(fileComments[docType]?.general?.comment) && fileComments[docType].general.comment.length > 0)) && (() => {
+                    const comments = Array.isArray(fileComments[docType]?.general?.comment) ? fileComments[docType].general.comment : [];
+                    const hasUnresolved = comments.some(c => !c.resolved);
+                    const countUnresolved = comments.filter(c => !c.resolved).length;
+                    const resolvedCount = comments.filter(c => c.resolved).length;
+                    
+                    const btnClass = hasUnresolved && comments.length > 0 
+                        ? 'bg-red-50 text-red-500 border border-red-200 hover:bg-red-100 hover:text-red-600' 
+                        : (comments.length > 0 ? 'bg-regdoc-mist text-regdoc-teal border border-regdoc-cyan hover:bg-regdoc-cyan/20' : 'bg-white text-regdoc-navy/60 border border-regdoc-grey hover:border-regdoc-cyan hover:text-regdoc-cyan');
+
+                    return (
+                        <button 
+                            onClick={() => setRemarksModal({ show: true, adding: false, newText: '' })} 
+                            className={`flex flex-col items-center gap-1 sm:gap-1.5 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl font-bold text-[10px] sm:text-[11px] transition-all tracking-wider shadow-sm uppercase outline-none shrink-0 ${btnClass}`}
+                        >
+                            <div className="flex items-center gap-2">
+                                <MessageCircle size={16} strokeWidth={2.5}/> Замечания
+                                {countUnresolved > 0 && <span className="bg-red-500 text-white rounded-full px-2 py-0.5 text-[10px] leading-none">{countUnresolved}</span>}
+                                {countUnresolved === 0 && comments.length > 0 && <CheckCircle2 size={16} className="text-regdoc-teal"/>}
+                            </div>
+                            {user?.email === 'admin' && resolvedCount > 0 && (
+                                <div className="text-[9px] text-regdoc-teal leading-tight capitalize-first px-2 rounded-md bg-white border border-regdoc-cyan/30 mt-0.5">Устранено: {resolvedCount}</div>
+                            )}
+                        </button>
+                    );
+                })()}
             </div>
         )}
 
@@ -866,6 +950,24 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
           )}
         </div>
       </div>
+      
+      {fileToDelete && (
+        <div className="fixed inset-0 bg-regdoc-navy/80 backdrop-blur-sm z-[250] flex items-center justify-center p-4 animate-in fade-in duration-200">
+            <div className="bg-white rounded-[32px] p-6 sm:p-8 max-w-sm w-full text-center shadow-2xl border border-red-100 animate-in zoom-in-95 duration-200">
+              <Trash2 className="w-16 h-16 mx-auto mb-4 sm:mb-6 text-red-500" />
+              <h3 className="text-lg sm:text-xl font-bold text-regdoc-navy mb-2 sm:mb-3">Удалить файл?</h3>
+              <p className="text-xs sm:text-sm text-regdoc-navy/70 mb-6 sm:mb-8 px-2 font-medium">
+                Вы уверены, что хотите удалить файл <strong>{fileToDelete.filename}</strong>?<br/><br/>Это действие нельзя отменить.
+              </p>
+              <div className="flex gap-3">
+                  <button onClick={() => setFileToDelete(null)} className="flex-1 py-3 sm:py-3.5 bg-regdoc-grey text-regdoc-navy font-bold rounded-2xl hover:bg-gray-300 transition-all text-sm outline-none">Отмена</button>
+                  <button onClick={confirmDeleteFileOnServer} className="flex-1 py-3 sm:py-3.5 bg-red-500 text-white font-bold rounded-2xl hover:bg-red-600 transition-all text-sm shadow-md outline-none border border-red-600">Удалить</button>
+              </div>
+            </div>
+        </div>
+      )}
+
+
     </div>
   );
 }
@@ -948,48 +1050,39 @@ function UploadCard({ title, desc, category, files, existing, onUpload, onRemove
 
         {existing && existing.map((name, i) => {
             const isVerified = verifiedFiles[name] === true;
-            const cData = fileComments && fileComments[name] ? fileComments[name] : null;
-            const hasIssue = cData?.status === 'needs_fix';
-            const userNeedsToReply = hasIssue && !cData?.userReply && !isAdmin;
-            const adminNeedsToRead = cData?.expertUnread && isAdmin;
 
             return (
-                <div key={i} className={`p-1 rounded-xl flex items-center gap-1 animate-in zoom-in-95 w-full justify-between border ${isVerified ? 'bg-regdoc-mist border-regdoc-cyan/30' : hasIssue ? 'bg-red-50 border-red-200' : 'bg-white border-regdoc-grey'}`}>
-                    <div className="flex items-center gap-1 flex-1 overflow-hidden">
-                        <button onClick={() => onViewFile(name)} className="flex items-center gap-1 text-left px-1.5 flex-1 min-w-0">
-                            {hasIssue ? <AlertCircle size={12} className="text-red-500 shrink-0" /> : <FileText size={12} className={isVerified ? 'text-regdoc-cyan shrink-0' : 'text-regdoc-navy/40 shrink-0'} />}
-                            <span className={`text-[10px] font-semibold truncate ${isVerified ? 'text-regdoc-teal' : hasIssue ? 'text-red-600' : 'text-regdoc-navy/70'}`}>{name}</span>
+                <div key={i} className={`p-1.5 sm:p-1.5 sm:pl-3 rounded-xl flex flex-col sm:flex-row sm:items-center gap-2.5 animate-in zoom-in-95 w-full justify-between items-start border ${isVerified ? 'bg-regdoc-mist border-regdoc-cyan/30' : 'bg-white border-regdoc-grey shadow-sm hover:shadow-md transition-shadow'}`}>
+                    <div className="flex items-center gap-2 flex-1 w-full overflow-hidden">
+                        <FileText size={16} className={isVerified ? 'text-regdoc-cyan shrink-0' : 'text-regdoc-navy/40 shrink-0'} />
+                        <button onClick={() => onViewFile(name)} className="flex items-center text-left flex-1 min-w-0 hover:underline decoration-regdoc-cyan outline-none">
+                            <span className={`text-[12px] font-bold truncate ${isVerified ? 'text-regdoc-teal' : 'text-regdoc-navy/80'}`}>{name}</span>
                         </button>
-
-                        <div className="flex items-center gap-1 shrink-0 ml-1">
-                            <button onClick={() => onOpenChat(name)} className={`p-1.5 rounded-md transition-all border ${hasIssue ? 'bg-red-100 border-red-200 text-red-600 hover:bg-red-200' : 'bg-regdoc-grey/40 border-regdoc-grey/50 text-regdoc-navy/60 hover:bg-regdoc-grey hover:text-regdoc-navy'} relative`} title="Комментарии к файлу">
-                                <MessageCircle size={13} strokeWidth={2.5} />
-                                {(userNeedsToReply || adminNeedsToRead) && (
-                                    <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white animate-pulse"></span>
-                                )}
-                            </button>
-
-                            {isAdmin && (
-                                <>
-                                    <label className={`w-5 h-5 rounded-md flex items-center justify-center cursor-pointer transition-all border ${isVerified ? 'bg-regdoc-teal border-regdoc-teal text-white' : 'bg-gray-50 border-gray-300 text-transparent hover:border-regdoc-teal'}`}>
-                                        <input type="checkbox" checked={isVerified} onChange={() => onToggleVerify(name)} className="hidden" />
-                                        <Check size={14} strokeWidth={3} />
-                                    </label>
-                                    
-                                    <button 
-                                        onClick={() => onSaveVerify(name)}
-                                        className={`p-1.5 rounded-md transition-all border ${isVerified ? 'bg-regdoc-teal border-regdoc-teal text-white shadow-sm hover:brightness-110' : 'bg-gray-100 border-gray-200 text-gray-300 cursor-not-allowed opacity-50'}`}
-                                        title="Сохранить отметку о проверке этого файла"
-                                    >
-                                        <Save size={13} strokeWidth={2.5} />
-                                    </button>
-                                </>
-                            )}
-                        </div>
                     </div>
-                    {canDeleteExisting && (
-                        <button onClick={() => onDeleteExisting(name)} className="p-1 px-2 text-red-500 hover:bg-red-50 hover:text-white rounded-lg transition-all text-[10px] font-bold shrink-0 ml-1">Удалить</button>
-                    )}
+
+                    <div className="flex sm:justify-end gap-2 w-full sm:w-auto mt-0.5 sm:mt-0 items-stretch shrink-0">
+                        {isAdmin && (
+                            <div className="flex bg-gray-50 border border-gray-200 rounded-lg overflow-hidden shrink-0 shadow-sm transition-all hover:border-gray-300 group focus-within:ring-2 focus-within:ring-regdoc-cyan">
+                                <label className={`flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 sm:py-1.5 cursor-pointer transition-all ${isVerified ? 'bg-regdoc-teal text-white' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'} outline-none flex-1 sm:flex-none`}>
+                                    <input type="checkbox" checked={isVerified} onChange={() => onToggleVerify(name)} className="hidden" />
+                                    <Check size={16} strokeWidth={isVerified ? 3 : 2.5} />
+                                    <span className="text-[10px] font-bold tracking-wider leading-none mr-0.5 select-none uppercase">Проверено</span>
+                                </label>
+                                
+                                <button 
+                                    onClick={() => onSaveVerify(name)}
+                                    className={`px-3 py-2 sm:py-1.5 flex items-center justify-center transition-all border-l ${isVerified ? 'border-regdoc-teal/20 bg-regdoc-teal text-white hover:brightness-110' : 'border-gray-200 text-gray-400 hover:bg-gray-100 hover:text-regdoc-navy'} outline-none relative hover-active-scale`}
+                                    title="Сохранить отметку о проверке этого файла"
+                                >
+                                    <Save size={16} />
+                                </button>
+                            </div>
+                        )}
+
+                        {canDeleteExisting && (
+                            <button onClick={() => onDeleteExisting(name)} className="px-4 py-2 sm:py-1.5 text-red-500 bg-red-50 hover:bg-red-500 hover:text-white border border-red-100 uppercase rounded-lg transition-all text-[10px] font-bold shrink-0 shadow-sm outline-none w-full sm:w-auto text-center active:scale-95 tracking-wide flex-1 sm:flex-none flex items-center justify-center">Удалить</button>
+                        )}
+                    </div>
                 </div>
             );
         })}
