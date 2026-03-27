@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Check, ChevronRight, User, Briefcase, FileSignature, FileCheck2, Camera, Paperclip, Loader2, FileText, CheckCircle2, RotateCw, History, PlusCircle, AlertCircle, Info, XCircle } from 'lucide-react';
+import { Check, ChevronRight, User, Briefcase, FileSignature, FileCheck2, Camera, Paperclip, Loader2, FileText, CheckCircle2, Save, RotateCw, History, PlusCircle, AlertCircle, Info, XCircle, MessageCircle, X } from 'lucide-react';
 import imageCompression from 'browser-image-compression';
 import { authFetch } from '../lib/api.js';
+import { formatFIO } from '../lib/formatters.js';
 
-export default function RegistrationFlow({ editingRequest, onComplete }) {
+export default function RegistrationFlow({ editingRequest, user, onComplete }) {
   const [currentStep, setCurrentStep] = useState(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isCompressing, setIsCompressing] = useState(false);
@@ -11,8 +12,6 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
   const [isSearching, setIsSearching] = useState(false);
   
   const [modal, setModal] = useState({ show: false, title: '', message: '', type: 'info' });
-  const [searchCache, setSearchCache] = useState(null);
-  const [showDecision, setShowDecision] = useState(false);
 
   const [activeFolderName, setActiveFolderName] = useState('');
   const [isNewApplication, setIsNewApplication] = useState(true);
@@ -28,7 +27,45 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
   const [selectedPzCopies, setSelectedPzCopies] = useState({});
 
   const [formData, setFormData] = useState({ fullName: '', companyName: '', licensePlate: '', conversionType: 'На транспортное средство предполагается установка комплекта газобаллонного оборудования для питания двигателя природным газом (пропан).' });
-  
+  const [verifiedFiles, setVerifiedFiles] = useState({});
+  const [fileComments, setFileComments] = useState({});
+  const [chatModal, setChatModal] = useState({ show: false, filename: '', dbKey: '', category: '', comment: '', status: '', userReply: '' });
+  const [gboOption, setGboOption] = useState('install_propan');
+  const [addTsu, setAddTsu] = useState(false);
+
+  useEffect(() => {
+      if (!isDescriptionEditable) return;
+      
+      const isPropan = gboOption.includes('propan');
+      const gasType = isPropan ? 'пропан' : 'метан';
+      
+      let text = '';
+      
+      if (gboOption.includes('gasdiesel')) {
+          text = `На транспортное средство предполагается установка комплекта газодизельного оборудования для работы в двухтопливном режиме и использования для питания двигателя природного газа (${gasType})`;
+      } else {
+          let baseAction = 'установка комплекта газобаллонного оборудования';
+          if (gboOption.includes('dismantle')) baseAction = 'демонтаж комплекта газобаллонного оборудования';
+          text = `На транспортное средство предполагается ${baseAction} для питания двигателя природным газом (${gasType})`;
+      }
+      
+      if (addTsu) text += ` и установка ТСУ`;
+      text += `.`;
+      
+      setFormData(prev => ({ ...prev, conversionType: text }));
+  }, [gboOption, addTsu, isDescriptionEditable]);
+
+  const getTypeRequests = () => {
+    const isPropan = gboOption.includes('propan');
+    const prefix = isPropan ? 'propane_' : 'methane_';
+    let action = 'installation';
+    if (gboOption.includes('dismantle')) action = 'dismantling';
+    if (gboOption.includes('gasdiesel')) action = 'gas_diesel';
+    let res = prefix + action;
+    if (addTsu) res += '+STU';
+    return res;
+  };
+
   const defaultFiles = {
       passport: [], snils: [], sts: [], pts: [], egrn: [],
       balloon_passport: [], act_opresovki: [], cert_gbo: [], cert_balloon: [],
@@ -50,25 +87,30 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
     { id: 4, title: 'Документы' }, 
     { id: 5, title: docType === 'pz' ? 'Описание' : 'Фотографии' },
   ];
-
-  const triggerSync = () => {
-      if (activeFolderName) {
-          const data = new FormData();
-          data.append('step', 'sync_request');
-          data.append('folderName', activeFolderName);
-          authFetch('/api/upload', { method: 'POST', body: data, keepalive: true }).catch(() => {});
-      }
+  const commitRequest = async () => {
+    if (activeFolderName) {
+        const data = new FormData();
+        data.append('step', 'commit_request');
+        data.append('folderName', activeFolderName);
+        data.append('type_requests', getTypeRequests());
+        try {
+            await authFetch('/api/upload', { method: 'POST', body: data });
+        } catch (e) {
+            console.error('Commit failed:', e);
+        }
+    }
   };
 
-  const finishFlow = () => {
-      triggerSync();
+  const finishFlow = async () => {
+      setIsSubmitting(true);
+      await commitRequest();
+      setIsSubmitting(false);
       if (onComplete) onComplete();
       else window.location.reload();
   };
 
   useEffect(() => {
     const handleBeforeUnload = (e) => {
-        triggerSync();
         if (currentStep > 2 && currentStep < 6 && !showSuccess && isNewApplication) {
             e.preventDefault();
             e.returnValue = 'Заявка не завершена. Данные могут быть утеряны.';
@@ -78,7 +120,6 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => {
         window.removeEventListener('beforeunload', handleBeforeUnload);
-        triggerSync(); 
     };
   }, [currentStep, showSuccess, isNewApplication, activeFolderName]);
 
@@ -122,6 +163,12 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
                             setHasExistingDescription(true);
                             setIsDescriptionEditable(false);
                         }
+                        if (data.verified_files) {
+                            setVerifiedFiles(data.verified_files);
+                        }
+                        if (data.file_comments) {
+                            setFileComments(data.file_comments);
+                        }
                         setCurrentStep(editingRequest.forcedStep || 3);
                     } else {
                         showAlert("Ошибка", "Папка заявки не найдена на сервере.", "error");
@@ -137,6 +184,8 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
                 });
         }
     } else {
+        setVerifiedFiles({});
+        setFileComments({});
         setCurrentStep(1);
         setIsNewApplication(true);
         setActiveFolderName('');
@@ -145,8 +194,86 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
         setFormData({ fullName: '', companyName: '', licensePlate: '', conversionType: 'На транспортное средство предполагается установка комплекта газобаллонного оборудования для питания двигателя природным газом (пропан).' });
         setFiles(defaultFiles);
         setExistingCloudFiles(defaultFiles);
+        setGboOption('install_propan');
+        setAddTsu(false);
     }
   }, [editingRequest]);
+
+  const toggleVerifyFile = (filename) => {
+      const isVerified = verifiedFiles[docType]?.[filename] || false;
+      const next = !isVerified;
+      
+      const newVerifiedFiles = {
+          ...verifiedFiles,
+          [docType]: {
+              ...(verifiedFiles[docType] || {}),
+              [filename]: next
+          }
+      };
+      setVerifiedFiles(newVerifiedFiles);
+  };
+
+  const saveVerificationFile = async (filename) => {
+      const reqId = editingRequest?.ID;
+      if (!reqId) return;
+
+      // Рассчитываем итоговую верификацию всего раздела
+      // Раздел верифицирован, если для каждого обязательного поля ЕСТЬ хотя бы один файл И ВСЕ файлы в обязательных полях верифицированы.
+      const currentCategories = docType === 'pz' ? 
+          (clientType === 'individual' ? ['pts', 'sts', 'passport', 'snils'] : ['egrn', 'passport', 'pts', 'sts']) :
+          ['pts', 'sts', 'passport', 'snils', 'balloon_passport', 'act_opresovki', 'cert_gbo', 'cert_balloon', 'pte', 'zd', 'form207', 'gibdd_zayavlenie'];
+
+      // Проверяем: у всех ли категорий есть файлы и все ли они проверены
+      const allOk = currentCategories.every(cat => {
+          const catFiles = existingCloudFiles[cat] || [];
+          if (catFiles.length === 0) return false; // обязательное поле пусто - раздел не готов
+          return catFiles.every(fname => verifiedFiles[docType]?.[fname] === true);
+      });
+
+      try {
+          await authFetch('/api/requests/verify-file', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                  id: reqId, 
+                  docType, 
+                  filename: filename, 
+                  verified: verifiedFiles[docType]?.[filename],
+                  isFullyVerified: allOk 
+              })
+          });
+      } catch (e) {
+          console.error('Save file verification failed:', e);
+      }
+  };
+
+  const deleteFileOnServer = async (category, filename) => {
+      if (!window.confirm(`Удалить файл ${filename}?`)) return;
+      const reqId = editingRequest?.ID;
+      if (!reqId) return;
+
+      try {
+          const res = await authFetch('/api/requests/delete-file', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: reqId, docType, filename })
+          });
+          if (res.ok) {
+              setExistingCloudFiles(prev => ({
+                  ...prev,
+                  [category]: prev[category].filter(f => f !== filename)
+              }));
+          }
+      } catch (e) {
+          console.error('Delete failed:', e);
+      }
+  };
+
+  const openFile = (filename) => {
+      const reqId = editingRequest?.ID;
+      if (!reqId) return;
+      window.open(`/api/requests/view-file?id=${reqId}&docType=${docType}&filename=${encodeURIComponent(filename)}`, '_blank');
+  };
 
   const handleRealUpload = (file, category, index) => {
       const key = file.name + file.size;
@@ -205,63 +332,6 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
     return fioRegex.test(name.trim());
   };
 
-  const checkExistingApplication = async () => {
-    if (!formData.licensePlate.trim()) {
-        showAlert("Внимание", "Пожалуйста, введите гос. номер для поиска", "info");
-        return;
-    }
-    setIsSearching(true);
-    try {
-      const res = await authFetch(`/api/check-plate?plate=${encodeURIComponent(formData.licensePlate)}`);
-      const data = await res.json();
-      if (data.found) {
-        setSearchCache(data);
-        setShowDecision(true);
-      } else {
-        showAlert("Не найдено", "Заявка с таким номером не найдена. Вы можете заполнить её с нуля.", "info");
-      }
-    } catch (e) { 
-        showAlert("Ошибка", "Не удалось связаться с сервером. Проверьте интернет.", "error"); 
-    }
-    finally { setIsSearching(false); }
-  };
-
-  const handleDecision = (choice) => {
-    if (choice === 'continue') {
-      setFormData(prev => ({ ...prev, fullName: searchCache.fullName }));
-      if (searchCache.existingFiles) setExistingCloudFiles({...defaultFiles, ...searchCache.existingFiles});
-      
-      if (searchCache.pzFiles) {
-          setAvailablePzFiles({
-              passport: searchCache.pzFiles.passport?.length > 0,
-              snils: searchCache.pzFiles.snils?.length > 0,
-              sts: searchCache.pzFiles.sts?.length > 0,
-              pts: searchCache.pzFiles.pts?.length > 0,
-              egrn: searchCache.pzFiles.egrn?.length > 0,
-          });
-      }
-
-      setActiveFolderName(searchCache.folderName);
-      setIsNewApplication(false);
-      
-      if (searchCache.hasDescription) {
-          setHasExistingDescription(true);
-          setIsDescriptionEditable(false);
-      }
-    } else {
-      setFormData(prev => ({ ...prev, fullName: '', companyName: '' }));
-      setFiles(defaultFiles);
-      setExistingCloudFiles(defaultFiles);
-      setActiveFolderName('');
-      setIsNewApplication(true);
-      setAvailablePzFiles({});
-      setSelectedPzCopies({});
-      setHasExistingDescription(false);
-      setIsDescriptionEditable(true);
-    }
-    setShowDecision(false);
-    setCurrentStep(2);
-  };
 
   const handlePlateInput = (e) => {
     let raw = e.target.value.toUpperCase();
@@ -278,25 +348,7 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
   };
 
   const handleFullNameChange = (val) => {
-    const enToRu = {
-        'q':'й', 'w':'ц', 'e':'у', 'r':'к', 't':'е', 'y':'н', 'u':'г', 'i':'ш', 'o':'щ', 'p':'з', '[':'х', ']':'ъ',
-        'a':'ф', 's':'ы', 'd':'в', 'f':'а', 'g':'п', 'h':'р', 'j':'о', 'k':'л', 'l':'д', ';':'ж', "'":'э',
-        'z':'я', 'x':'ч', 'c':'с', 'v':'м', 'b':'и', 'n':'т', 'm':'ь', ',':'б', '.':'ю', '`':'ё',
-        'Q':'Й', 'W':'Ц', 'E':'У', 'R':'К', 'T':'Е', 'Y':'Н', 'U':'Г', 'I':'Ш', 'O':'Щ', 'P':'З', '{':'Х', '}':'Ъ',
-        'A':'Ф', 'S':'Ы', 'D':'В', 'F':'А', 'G':'П', 'H':'Р', 'J':'О', 'K':'Л', 'L':'Д', ':':'Ж', '"':'Э',
-        'Z':'Я', 'X':'Ч', 'C':'С', 'V':'М', 'B':'И', 'N':'Т', 'M':'Ь', '<':'Б', '>':'Ю', '~':'Ё'
-    };
-    let translated = '';
-    for(let i=0; i<val.length; i++) {
-        translated += enToRu[val[i]] || val[i];
-    }
-    let clean = translated.replace(/[^А-Яа-яЁё\s]/g, '');
-    let formatted = clean.split(' ').map(word => {
-        if (!word) return '';
-        return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
-    }).join(' ');
-    
-    setFormData({ ...formData, fullName: formatted });
+    setFormData({ ...formData, fullName: formatFIO(val) });
   };
 
   const handleFileChange = async (e, category) => {
@@ -360,7 +412,6 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
   const isAnyFilePending = Object.values(fileStatuses).some(status => status.state === 'pending');
 
   const handleNextStep = async () => {
-      triggerSync();
       if (currentStep === 1) { setCurrentStep(2); return; }
       
       if (currentStep === 2) {
@@ -376,6 +427,7 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
               data.append('fullName', formData.fullName);
               data.append('companyName', formData.companyName);
               data.append('licensePlate', formData.licensePlate);
+              data.append('type_requests', getTypeRequests());
               try {
                   const res = await authFetch('/api/upload', { method: 'POST', body: data });
                   const json = await res.json();
@@ -413,7 +465,8 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
   };
 
   const renderUploadCard = (title, desc, category) => {
-      const canCopy = docType === 'pb' && availablePzFiles[category];
+      const existing = existingCloudFiles[category] || [];
+      const canCopy = docType === 'pb' && availablePzFiles[category] && existing.length === 0;
       const isCopied = selectedPzCopies[category] || false;
       return (
           <UploadCard 
@@ -421,7 +474,7 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
               title={title} 
               desc={desc} 
               files={files[category] || []} 
-              existing={existingCloudFiles[category] || []} 
+              existing={existing} 
               onUpload={e => handleFileChange(e, category)} 
               onRemove={i => setFiles({...files, [category]: files[category].filter((_,idx)=>idx!==i)})} 
               fileStatuses={fileStatuses} 
@@ -429,13 +482,122 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
               canCopy={canCopy}
               isCopied={isCopied}
               onToggleCopy={() => setSelectedPzCopies(prev => ({...prev, [category]: !prev[category]}))}
+              isAdmin={user?.email === 'admin'}
+              canDeleteExisting={user?.email === 'admin' || !isNewApplication}
+              verifiedFiles={verifiedFiles[docType] || {}}
+              onToggleVerify={toggleVerifyFile}
+              onSaveVerify={saveVerificationFile}
+              onDeleteExisting={(fname) => deleteFileOnServer(category, fname)}
+              onViewFile={(fname) => openFile(fname)}
+              fileComments={fileComments[docType] || {}}
+              onOpenChat={(fname, isCategory) => {
+                  const dbKey = isCategory ? `@category_${category}` : fname;
+                  const data = (fileComments[docType] || {})[dbKey] || {};
+                  setChatModal({ show: true, dbKey, filename: isCategory ? `Раздел: ${title}` : fname, category, comment: data.comment || '', status: data.status || 'verified', userReply: data.userReply || '' });
+              }}
           />
       );
   };
 
+  const saveFileComment = async () => {
+      const reqId = editingRequest?.ID;
+      if (!reqId || !chatModal.dbKey) return;
+
+      const isAdmin = user?.email === 'admin';
+      const payload = {
+          id: reqId,
+          docType,
+          filename: chatModal.dbKey,
+      };
+
+      if (isAdmin) {
+          payload.status = chatModal.status;
+          payload.comment = chatModal.comment;
+      } else {
+          payload.userReply = chatModal.userReply;
+      }
+
+      try {
+          const res = await authFetch('/api/requests/file-comment', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+          });
+          if (res.ok) {
+              setFileComments(prev => ({
+                  ...prev,
+                  [docType]: {
+                      ...(prev[docType] || {}),
+                      [chatModal.dbKey]: {
+                          ...((prev[docType] || {})[chatModal.dbKey] || {}),
+                          ...payload,
+                          expertUnread: !isAdmin
+                      }
+                  }
+              }));
+              setChatModal({ ...chatModal, show: false });
+          }
+      } catch (e) {
+          console.error('Save comment failed:', e);
+      }
+  };
+
   return (
     <div className="bg-white rounded-3xl shadow-xl border border-regdoc-grey overflow-hidden max-w-2xl mx-auto relative min-h-[500px]">
-      
+
+      {chatModal.show && (
+        <div className="absolute inset-0 bg-regdoc-navy/80 backdrop-blur-sm z-[250] flex items-center justify-center p-4 animate-in fade-in zoom-in-95 duration-200">
+          <div className="bg-white rounded-[32px] p-6 sm:p-8 w-full max-w-md shadow-2xl flex flex-col gap-4 border border-regdoc-grey">
+            <div className="flex justify-between items-center mb-2">
+                <div>
+                    <h3 className="text-xl font-bold text-regdoc-navy leading-none">Комментарии к файлу</h3>
+                    <p className="text-[10px] sm:text-xs font-bold text-regdoc-navy/40 uppercase mt-1 tracking-wider truncate max-w-[200px]">{chatModal.filename}</p>
+                </div>
+                <button onClick={() => setChatModal({...chatModal, show: false})} className="p-2 bg-regdoc-grey/40 text-regdoc-navy/60 hover:bg-regdoc-grey hover:text-regdoc-navy rounded-xl transition-all"><X size={20}/></button>
+            </div>
+
+            {user?.email === 'admin' ? (
+                <>
+                    <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-regdoc-navy/50 uppercase ml-1">Статус файла</label>
+                        <select className="w-full p-3 bg-regdoc-grey/40 border border-regdoc-grey rounded-2xl outline-none focus:border-regdoc-cyan text-sm font-bold text-regdoc-navy" value={chatModal.status} onChange={e => setChatModal({...chatModal, status: e.target.value})}>
+                            <option value="verified">ОК (проверено)</option>
+                            <option value="needs_fix">Требует исправления</option>
+                        </select>
+                    </div>
+                    <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-regdoc-navy/50 uppercase ml-1">Сообщение пользователю</label>
+                        <textarea className="w-full p-4 bg-regdoc-grey/40 border border-regdoc-grey rounded-2xl outline-none focus:border-regdoc-cyan transition-all text-sm h-28 resize-none" placeholder="Загрузите разворот паспорта с пропиской..." value={chatModal.comment} onChange={e => setChatModal({...chatModal, comment: e.target.value})}></textarea>
+                    </div>
+                    {chatModal.userReply && (
+                        <div className="bg-regdoc-mist p-4 rounded-2xl border border-regdoc-cyan/30 mt-2">
+                            <label className="text-[10px] font-bold text-regdoc-cyan uppercase block mb-1">Ответ пользователя:</label>
+                            <p className="text-sm text-regdoc-navy font-medium italic">{chatModal.userReply}</p>
+                        </div>
+                    )}
+                </>
+            ) : (
+                <>
+                    {chatModal.comment ? (
+                        <div className="bg-red-50 p-4 rounded-2xl border border-red-100">
+                            <label className="text-[10px] font-bold text-red-500 uppercase block mb-1 flex items-center gap-1"><AlertCircle size={12}/> Замечание эксперта:</label>
+                            <p className="text-sm text-red-600 font-bold">{chatModal.comment}</p>
+                        </div>
+                    ) : (
+                        <div className="text-center py-4 bg-gray-50 text-gray-400 text-sm font-medium border border-dashed rounded-xl border-gray-200">Замечаний от эксперта пока нет.</div>
+                    )}
+                    <div className="space-y-1.5 mt-2">
+                        <label className="text-[10px] font-bold text-regdoc-navy/50 uppercase ml-1">Ваш ответ</label>
+                        <textarea className="w-full p-4 bg-regdoc-grey/40 border border-regdoc-grey rounded-2xl outline-none focus:border-regdoc-cyan transition-all text-sm h-24 resize-none" placeholder="Файл пересдан, проверьте пожалуйста." value={chatModal.userReply} onChange={e => setChatModal({...chatModal, userReply: e.target.value})}></textarea>
+                    </div>
+                </>
+            )}
+
+            <button onClick={saveFileComment} className="w-full py-3.5 bg-regdoc-cyan text-white font-bold rounded-2xl hover:bg-regdoc-teal transition-all shadow-md mt-2">Сохранить</button>
+          </div>
+        </div>
+      )}
+
       {modal.show && (
         <div className="absolute inset-0 bg-regdoc-navy/40 backdrop-blur-md z-[200] flex items-center justify-center p-6 animate-in fade-in zoom-in-95 duration-200">
           <div className="bg-white rounded-[40px] p-8 w-full max-w-sm text-center shadow-2xl border-t-4 border-regdoc-cyan/40">
@@ -469,19 +631,6 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
         </div>
       )}
 
-      {showDecision && (
-        <div className="absolute inset-0 bg-regdoc-navy/95 backdrop-blur-md z-[110] flex items-center justify-center p-6 animate-in zoom-in-95">
-          <div className="bg-white rounded-[40px] p-8 w-full max-w-md shadow-2xl">
-            <div className="w-16 h-16 bg-regdoc-orange/15 text-regdoc-orange rounded-full flex items-center justify-center mx-auto mb-4"><History size={32} /></div>
-            <h3 className="text-xl font-bold text-regdoc-navy text-center mb-2">Найдена заявка!</h3>
-            <p className="text-regdoc-navy/55 text-center text-sm mb-8">Для автомобиля <b>{formData.licensePlate}</b>. Как поступим?</p>
-            <div className="space-y-3">
-                <button onClick={() => handleDecision('continue')} className="w-full py-4 bg-regdoc-cyan text-white font-bold rounded-2xl flex items-center justify-center gap-2 hover:bg-regdoc-teal transition-all"><RotateCw size={18} /> Продолжить</button>
-                <button onClick={() => handleDecision('new')} className="w-full py-4 bg-regdoc-grey text-regdoc-navy/65 font-bold rounded-2xl flex items-center justify-center gap-2 hover:bg-regdoc-grey/80 transition-all"><PlusCircle size={18} /> Создать новую</button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {showSuccess && (
         <div className="absolute inset-0 bg-regdoc-navy/90 backdrop-blur-md z-[100] flex items-center justify-center p-6 animate-in fade-in">
@@ -503,7 +652,7 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
 
       <div className="bg-regdoc-grey/60 p-4 border-b border-regdoc-grey flex justify-between px-8 sm:px-12">
         {steps.map((s) => (
-          <div key={s.id} className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-all ${currentStep >= s.id ? 'bg-regdoc-cyan border-regdoc-cyan text-white' : 'bg-white border-regdoc-grey text-regdoc-navy/35'}`}>
+          <div key={s.id} className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-all ${currentStep >= s.id ? 'bg-regdoc-orange border-regdoc-orange text-white' : 'bg-white border-regdoc-grey text-regdoc-navy/35'}`}>
             {currentStep > s.id ? <Check size={14} /> : s.id}
           </div>
         ))}
@@ -511,16 +660,18 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
 
       <div className="p-4 sm:p-8">
         
+        {currentStep >= 3 && (
+            <div className="bg-regdoc-mist/40 border border-regdoc-cyan/20 rounded-2xl p-3 sm:p-4 mb-4 sm:mb-6 animate-in slide-in-from-top-2">
+                <div className="text-[10px] sm:text-[11px] font-bold text-regdoc-navy/45 uppercase tracking-wider mb-1">
+                    {docType === 'pz' ? 'Заявка на Предварительное заключение' : 'Заявка на Протокол безопасности'}
+                </div>
+                <div className="font-bold text-regdoc-navy text-sm sm:text-base">Гос. номер: <span className="text-regdoc-cyan tracking-wider">{formData.licensePlate}</span></div>
+                <div className="text-[11px] sm:text-xs text-regdoc-navy/70 leading-tight mt-0.5">ФИО: {formData.fullName || 'Не указано'}</div>
+            </div>
+        )}
+
         {currentStep === 1 && (
             <div className="space-y-6 animate-in slide-in-from-bottom-2">
-                <div className="space-y-3">
-                    <h3 className="font-bold text-lg text-regdoc-navy">Начните с номера авто</h3>
-                    <div className="relative">
-                        <Input label="Гос. номер автомобиля (необязательно)" value={formData.licensePlate} onChange={() => {}} onInput={handlePlateInput} placeholder="А 123 АА / 77" isMono />
-                        <button onClick={checkExistingApplication} className="absolute right-3 bottom-3 p-2 bg-regdoc-cyan text-white rounded-xl shadow-md hover:bg-regdoc-teal hover:scale-105 active:scale-95 transition-all"><RotateCw size={20} className={isSearching ? 'animate-spin' : ''} /></button>
-                    </div>
-                </div>
-                <hr className="border-regdoc-grey" />
                 <div className="space-y-4">
                     <h3 className="font-bold text-lg text-regdoc-navy">Кто собственник ТС?</h3>
                     <SelectionCard active={clientType === 'individual'} onClick={() => setClientType('individual')} icon={<User />} title="Физическое лицо" desc="Частный владелец" />
@@ -607,8 +758,58 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
                             </button>
                         )}
                     </div>
+                    
+                    {(!hasExistingDescription || isDescriptionEditable) && (
+                        <div className="bg-regdoc-grey/25 p-4 rounded-2xl border border-regdoc-grey mb-3 font-sans animate-in slide-in-from-top-2">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div>
+                                    <div className="font-bold text-regdoc-navy mb-2 text-[10px] uppercase tracking-widest text-regdoc-navy/60">Пропан</div>
+                                    <div className="space-y-2">
+                                        <label className="flex items-center gap-2 cursor-pointer group">
+                                            <input type="radio" name="gbo_opt" className="w-4 h-4 accent-regdoc-orange cursor-pointer" checked={gboOption==='install_propan'} onChange={() => setGboOption('install_propan')} />
+                                            <span className={`text-sm ${gboOption==='install_propan'?'font-bold text-regdoc-navy':'text-regdoc-navy/70 group-hover:text-regdoc-navy'}`}>Установка ГБО Пропан</span>
+                                        </label>
+                                        <label className="flex items-center gap-2 cursor-pointer group">
+                                            <input type="radio" name="gbo_opt" className="w-4 h-4 accent-regdoc-orange cursor-pointer" checked={gboOption==='dismantle_propan'} onChange={() => setGboOption('dismantle_propan')} />
+                                            <span className={`text-sm ${gboOption==='dismantle_propan'?'font-bold text-regdoc-navy':'text-regdoc-navy/70 group-hover:text-regdoc-navy'}`}>Демонтаж ГБО Пропан</span>
+                                        </label>
+                                        <label className="flex items-center gap-2 cursor-pointer group">
+                                            <input type="radio" name="gbo_opt" className="w-4 h-4 accent-regdoc-orange cursor-pointer" checked={gboOption==='gasdiesel_propan'} onChange={() => setGboOption('gasdiesel_propan')} />
+                                            <span className={`text-sm ${gboOption==='gasdiesel_propan'?'font-bold text-regdoc-navy':'text-regdoc-navy/70 group-hover:text-regdoc-navy'}`}>Газодизель ГБО Пропан</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div>
+                                    <div className="font-bold text-regdoc-navy mb-2 text-[10px] uppercase tracking-widest text-regdoc-navy/60">Метан</div>
+                                    <div className="space-y-2">
+                                        <label className="flex items-center gap-2 cursor-pointer group">
+                                            <input type="radio" name="gbo_opt" className="w-4 h-4 accent-regdoc-orange cursor-pointer" checked={gboOption==='install_metan'} onChange={() => setGboOption('install_metan')} />
+                                            <span className={`text-sm ${gboOption==='install_metan'?'font-bold text-regdoc-navy':'text-regdoc-navy/70 group-hover:text-regdoc-navy'}`}>Установка ГБО Метан</span>
+                                        </label>
+                                        <label className="flex items-center gap-2 cursor-pointer group">
+                                            <input type="radio" name="gbo_opt" className="w-4 h-4 accent-regdoc-orange cursor-pointer" checked={gboOption==='dismantle_metan'} onChange={() => setGboOption('dismantle_metan')} />
+                                            <span className={`text-sm ${gboOption==='dismantle_metan'?'font-bold text-regdoc-navy':'text-regdoc-navy/70 group-hover:text-regdoc-navy'}`}>Демонтаж ГБО Метан</span>
+                                        </label>
+                                        <label className="flex items-center gap-2 cursor-pointer group">
+                                            <input type="radio" name="gbo_opt" className="w-4 h-4 accent-regdoc-orange cursor-pointer" checked={gboOption==='gasdiesel_metan'} onChange={() => setGboOption('gasdiesel_metan')} />
+                                            <span className={`text-sm ${gboOption==='gasdiesel_metan'?'font-bold text-regdoc-navy':'text-regdoc-navy/70 group-hover:text-regdoc-navy'}`}>Газодизель ГБО Метан</span>
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                            <hr className="border-regdoc-grey/80 my-3" />
+                            <div>
+                                <div className="font-bold text-regdoc-navy mb-2 text-[10px] uppercase tracking-widest text-regdoc-navy/60">Дополнительно</div>
+                                <label className="flex items-center gap-2 cursor-pointer group">
+                                    <input type="checkbox" className="w-4 h-4 accent-regdoc-orange cursor-pointer" checked={addTsu} onChange={(e) => setAddTsu(e.target.checked)} />
+                                    <span className={`text-sm ${addTsu?'font-bold text-regdoc-navy':'text-regdoc-navy/70 group-hover:text-regdoc-navy'}`}>Установка ТСУ</span>
+                                </label>
+                            </div>
+                        </div>
+                    )}
+
                     <textarea 
-                        className={`w-full h-44 p-5 rounded-2xl outline-none focus:border-regdoc-cyan leading-relaxed transition-all ${!isDescriptionEditable ? 'bg-regdoc-grey/50 border border-regdoc-grey text-regdoc-navy/40 cursor-not-allowed' : 'bg-white border border-regdoc-grey text-regdoc-navy'}`} 
+                        className={`w-full h-36 p-5 rounded-2xl outline-none focus:border-regdoc-cyan leading-relaxed transition-all text-sm shrink-0 ${!isDescriptionEditable ? 'bg-regdoc-grey/50 border border-regdoc-grey text-regdoc-navy/40 cursor-not-allowed' : 'bg-white border border-regdoc-grey text-regdoc-navy'}`} 
                         value={formData.conversionType} 
                         onChange={e => setFormData({...formData, conversionType: e.target.value})} 
                         disabled={!isDescriptionEditable}
@@ -644,7 +845,6 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
           <div className="flex gap-2 sm:gap-3">
             {currentStep > 1 && currentStep < 5 && (
               <button onClick={() => {
-                  triggerSync();
                   if (currentStep === 4 && isAnyFileUploading) {
                       return showAlert("Загрузка файлов", "Пожалуйста, дождитесь окончания загрузки файлов перед переходом на другой этап.", "info");
                   }
@@ -653,7 +853,7 @@ export default function RegistrationFlow({ editingRequest, onComplete }) {
             )}
 
             {currentStep === 5 && (
-              <button onClick={() => { triggerSync(); setCurrentStep(prev => prev - 1); }} className="px-4 sm:px-6 py-3 sm:py-4 rounded-xl sm:rounded-2xl border border-regdoc-grey font-bold text-sm sm:text-base text-regdoc-navy/50 hover:bg-regdoc-grey/40 transition-all">Назад</button>
+              <button onClick={() => { setCurrentStep(prev => prev - 1); }} className="px-4 sm:px-6 py-3 sm:py-4 rounded-xl sm:rounded-2xl border border-regdoc-grey font-bold text-sm sm:text-base text-regdoc-navy/50 hover:bg-regdoc-grey/40 transition-all">Назад</button>
             )}
 
             <button onClick={handleNextStep} disabled={isSubmitting} className="flex-1 py-3 sm:py-4 bg-regdoc-cyan text-white font-bold text-sm sm:text-base rounded-xl sm:rounded-2xl shadow-lg shadow-regdoc-navy/10 hover:bg-regdoc-teal transition-colors flex items-center justify-center disabled:opacity-60">
@@ -691,7 +891,7 @@ function Input({ label, value, onChange, onInput, placeholder, isMono }) {
   );
 }
 
-function UploadCard({ title, desc, files, existing, onUpload, onRemove, fileStatuses, onSimulateUpload, canCopy, isCopied, onToggleCopy }) {
+function UploadCard({ title, desc, category, files, existing, onUpload, onRemove, fileStatuses, onSimulateUpload, canCopy, isCopied, onToggleCopy, isAdmin, canDeleteExisting, verifiedFiles, onToggleVerify, onSaveVerify, onDeleteExisting, onViewFile, fileComments, onOpenChat }) {
   return (
     <div className="border border-regdoc-grey rounded-2xl p-2.5 sm:p-4 bg-regdoc-grey/35 h-full flex flex-col">
       <div className="flex justify-between items-start mb-2 sm:mb-3">
@@ -699,34 +899,100 @@ function UploadCard({ title, desc, files, existing, onUpload, onRemove, fileStat
           <div className="font-bold text-regdoc-navy text-xs sm:text-sm leading-none">{title}</div>
           {desc && <div className="text-[9px] sm:text-[10px] text-regdoc-navy/45 uppercase font-bold mt-1 tracking-tight">{desc}</div>}
           
-          {canCopy && (
-            <div className="mt-2 flex items-center gap-2 cursor-pointer group" onClick={onToggleCopy}>
-                <div className={`w-8 h-4 rounded-full transition-colors flex items-center px-0.5 shrink-0 ${isCopied ? 'bg-regdoc-cyan' : 'bg-regdoc-grey group-hover:bg-regdoc-grey/80'}`}>
-                    <div className={`w-3 h-3 rounded-full bg-white shadow-sm transition-transform ${isCopied ? 'translate-x-4' : 'translate-x-0'}`}></div>
-                </div>
-                <div className="text-[9px] font-bold text-regdoc-navy/60 uppercase tracking-wider truncate">Взять из ПЗ</div>
-            </div>
-          )}
+          {/* Copy toggle moved to inline row */}
 
         </div>
         <div className="flex gap-2 shrink-0 ml-2">
+            {(isAdmin || fileComments?.[`@category_${category}`]) && onOpenChat && (
+                <button 
+                  onClick={() => onOpenChat(category, true)} 
+                  className={`p-2 sm:p-2.5 rounded-xl shadow-sm border ${
+                      fileComments?.[`@category_${category}`]?.status === 'needs_fix' 
+                      ? 'bg-amber-100 border-amber-400 text-amber-600 hover:bg-amber-200' 
+                      : 'bg-white border-regdoc-grey text-regdoc-navy/50 hover:text-regdoc-cyan'
+                  } active:scale-95 transition-all relative outline-none`}
+                  title="Замечания к этому разделу документов"
+                >
+                    <MessageCircle size={18} className="sm:w-5 sm:h-5" />
+                    {((fileComments?.[`@category_${category}`]?.expertUnread && isAdmin) || (fileComments?.[`@category_${category}`]?.status === 'needs_fix' && !fileComments?.[`@category_${category}`]?.userReply && !isAdmin)) && (
+                        <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse border-2 border-white shadow-sm"></span>
+                    )}
+                </button>
+            )}
             <label className="bg-white p-2 sm:p-2.5 rounded-xl shadow-sm border border-regdoc-grey cursor-pointer text-regdoc-navy/50 hover:text-regdoc-cyan active:scale-95 transition-all"><Paperclip size={18} className="sm:w-5 sm:h-5" /><input type="file" multiple className="hidden" onChange={onUpload} accept="image/*,.pdf" /></label>
             <label className="sm:hidden bg-white p-2 rounded-xl shadow-sm border border-regdoc-grey cursor-pointer text-regdoc-cyan active:scale-95 transition-all"><Camera size={18} /><input type="file" className="hidden" onChange={onUpload} accept="image/*" capture="environment" /></label>
         </div>
       </div>
       <div className="flex flex-wrap gap-1.5 sm:gap-2 mt-auto">
         
-        {isCopied && (
-             <div className="bg-regdoc-cyan/10 border border-regdoc-cyan/30 p-2 rounded-xl text-[9px] sm:text-[10px] flex items-center gap-1.5 shadow-sm text-regdoc-teal font-bold animate-in zoom-in-95 w-full">
-                 <CheckCircle2 size={14} /> Отмечено для ПЗ
+        {canCopy && (
+             <div className={`bg-white border p-1.5 sm:p-2 rounded-xl flex items-center gap-2 sm:gap-3 shadow-sm animate-in zoom-in-95 w-full transition-all flex-wrap sm:flex-nowrap ${isCopied ? 'border-regdoc-orange' : 'border-regdoc-cyan/25'}`}>
+                 <div className="flex items-center gap-1.5 shrink-0">
+                     <CheckCircle2 size={16} className={isCopied ? 'text-regdoc-orange' : 'text-regdoc-navy/30'} />
+                     <span className="font-medium text-regdoc-navy text-[11px] sm:text-xs">взять из ПЗ</span>
+                 </div>
+                 
+                 <div className="flex items-center gap-2 shrink-0 cursor-pointer group" onClick={onToggleCopy}>
+                    <div className={`w-8 h-4 sm:w-10 sm:h-5 rounded-full transition-colors flex items-center px-0.5 ${isCopied ? 'bg-regdoc-orange' : 'bg-regdoc-grey group-hover:bg-regdoc-cyan/50'}`}>
+                        <div className={`w-3 h-3 sm:w-4 sm:h-4 rounded-full bg-white shadow-sm transition-transform ${isCopied ? 'translate-x-4 sm:translate-x-5' : 'translate-x-0'}`}></div>
+                    </div>
+                 </div>
+
+                 {isCopied && (
+                     <div className="bg-regdoc-orange/10 text-regdoc-orange px-2 py-1 rounded-lg text-[9px] sm:text-[10px] font-bold truncate animate-in fade-in slide-in-from-left-2 w-full sm:w-auto mt-1 sm:mt-0">
+                         документ будет загружен из документов для ПЗ
+                     </div>
+                 )}
              </div>
         )}
 
-        {existing && existing.map((name, i) => (
-            <div key={i} className="bg-regdoc-mist border border-regdoc-cyan/30 px-2 py-1 sm:px-2.5 sm:py-1.5 rounded-xl text-[9px] sm:text-[10px] text-regdoc-teal flex items-center gap-1 font-semibold animate-in zoom-in-95">
-                <Check size={10} strokeWidth={3} /> {name} (В облаке)
-            </div>
-        ))}
+        {existing && existing.map((name, i) => {
+            const isVerified = verifiedFiles[name] === true;
+            const cData = fileComments && fileComments[name] ? fileComments[name] : null;
+            const hasIssue = cData?.status === 'needs_fix';
+            const userNeedsToReply = hasIssue && !cData?.userReply && !isAdmin;
+            const adminNeedsToRead = cData?.expertUnread && isAdmin;
+
+            return (
+                <div key={i} className={`p-1 rounded-xl flex items-center gap-1 animate-in zoom-in-95 w-full justify-between border ${isVerified ? 'bg-regdoc-mist border-regdoc-cyan/30' : hasIssue ? 'bg-red-50 border-red-200' : 'bg-white border-regdoc-grey'}`}>
+                    <div className="flex items-center gap-1 flex-1 overflow-hidden">
+                        <button onClick={() => onViewFile(name)} className="flex items-center gap-1 text-left px-1.5 flex-1 min-w-0">
+                            {hasIssue ? <AlertCircle size={12} className="text-red-500 shrink-0" /> : <FileText size={12} className={isVerified ? 'text-regdoc-cyan shrink-0' : 'text-regdoc-navy/40 shrink-0'} />}
+                            <span className={`text-[10px] font-semibold truncate ${isVerified ? 'text-regdoc-teal' : hasIssue ? 'text-red-600' : 'text-regdoc-navy/70'}`}>{name}</span>
+                        </button>
+
+                        <div className="flex items-center gap-1 shrink-0 ml-1">
+                            <button onClick={() => onOpenChat(name)} className={`p-1.5 rounded-md transition-all border ${hasIssue ? 'bg-red-100 border-red-200 text-red-600 hover:bg-red-200' : 'bg-regdoc-grey/40 border-regdoc-grey/50 text-regdoc-navy/60 hover:bg-regdoc-grey hover:text-regdoc-navy'} relative`} title="Комментарии к файлу">
+                                <MessageCircle size={13} strokeWidth={2.5} />
+                                {(userNeedsToReply || adminNeedsToRead) && (
+                                    <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white animate-pulse"></span>
+                                )}
+                            </button>
+
+                            {isAdmin && (
+                                <>
+                                    <label className={`w-5 h-5 rounded-md flex items-center justify-center cursor-pointer transition-all border ${isVerified ? 'bg-regdoc-teal border-regdoc-teal text-white' : 'bg-gray-50 border-gray-300 text-transparent hover:border-regdoc-teal'}`}>
+                                        <input type="checkbox" checked={isVerified} onChange={() => onToggleVerify(name)} className="hidden" />
+                                        <Check size={14} strokeWidth={3} />
+                                    </label>
+                                    
+                                    <button 
+                                        onClick={() => onSaveVerify(name)}
+                                        className={`p-1.5 rounded-md transition-all border ${isVerified ? 'bg-regdoc-teal border-regdoc-teal text-white shadow-sm hover:brightness-110' : 'bg-gray-100 border-gray-200 text-gray-300 cursor-not-allowed opacity-50'}`}
+                                        title="Сохранить отметку о проверке этого файла"
+                                    >
+                                        <Save size={13} strokeWidth={2.5} />
+                                    </button>
+                                </>
+                            )}
+                        </div>
+                    </div>
+                    {canDeleteExisting && (
+                        <button onClick={() => onDeleteExisting(name)} className="p-1 px-2 text-red-500 hover:bg-red-50 hover:text-white rounded-lg transition-all text-[10px] font-bold shrink-0 ml-1">Удалить</button>
+                    )}
+                </div>
+            );
+        })}
         {files.map((f, i) => {
             const key = f.name + f.size;
             const status = fileStatuses && fileStatuses[key] ? fileStatuses[key] : { state: 'pending', progress: 0 };

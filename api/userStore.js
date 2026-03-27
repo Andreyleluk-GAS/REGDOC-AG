@@ -1,27 +1,15 @@
 import 'dotenv/config';
 import { createClient } from 'webdav';
 import * as XLSX from 'xlsx';
+import { getDb } from './db.js';
 
 let queue = Promise.resolve();
-
-const USERS_ROOT = '/RegDoc_Заявки/_USERS';
-const USERS_FILE = `${USERS_ROOT}/users.xlsx`;
-// НОВОЕ: Путь к файлу заявок
-const REQUESTS_FILE = `${USERS_ROOT}/requests.xlsx`;
-let requestsQueue = Promise.resolve();
 
 function getWebdavClient() {
   return createClient('https://webdav.cloud.mail.ru/', {
     username: process.env.VK_CLOUD_EMAIL,
     password: process.env.VK_CLOUD_PASSWORD,
   });
-}
-
-function defaultStore() {
-  return {
-    version: 1,
-    users: [],
-  };
 }
 
 function normalizeEmail(email) {
@@ -60,122 +48,73 @@ function usersFromRows(rows) {
     .filter((u) => u.id && u.email && u.passwordHash);
 }
 
-function storeToSheetData(store) {
-  const header = [
-    'id',
-    'email',
-    'passwordHash',
-    'verified',
-    'verifyToken',
-    'verifyExpires',
-    'createdAt',
-  ];
+export async function migrateUsersFromWebdav() {
+  const db = await getDb();
+  const count = await db.get('SELECT COUNT(*) as c FROM users');
+  if (count.c > 0) return; // Already migrated
 
-  const rows = (store.users || []).map((u) => ({
-    id: u.id,
-    email: u.email,
-    passwordHash: u.passwordHash,
-    verified: Boolean(u.verified),
-    verifyToken: u.verifyToken || '',
-    verifyExpires: u.verifyExpires ?? '',
-    createdAt: u.createdAt || '',
-  }));
-
-  return { header, rows };
-}
-
-async function ensureUsersXlsx() {
   const client = getWebdavClient();
-  if (!(await client.exists(USERS_ROOT))) {
-    await client.createDirectory(USERS_ROOT);
-  }
-  if (!(await client.exists(USERS_FILE))) {
-    const store = defaultStore();
-    const { header, rows } = storeToSheetData(store);
-    const ws = XLSX.utils.json_to_sheet(rows, { header, skipHeader: false });
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'users');
-    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-    await client.putFileContents(USERS_FILE, buf);
+  const USERS_FILE = '/RegDoc_Заявки/_USERS/users.xlsx';
+
+  try {
+    if (await client.exists(USERS_FILE)) {
+      const buffer = await client.getFileContents(USERS_FILE);
+      const workbook = XLSX.read(buffer, { type: 'buffer' });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+      const users = usersFromRows(rows);
+
+      for (const u of users) {
+        await db.run(
+          'INSERT OR IGNORE INTO users (id, email, passwordHash, verified, verifyToken, verifyExpires, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [u.id, u.email, u.passwordHash, u.verified ? 1 : 0, u.verifyToken, u.verifyExpires, u.createdAt]
+        );
+      }
+      console.log(`[db] Migrated ${users.length} users from WebDAV`);
+    }
+  } catch (e) {
+    console.error('[db] Error migrating users:', e.message);
   }
 }
 
 export async function loadStore() {
-  await ensureUsersXlsx();
-  const client = getWebdavClient();
-  const buffer = await client.getFileContents(USERS_FILE);
-  const workbook = XLSX.read(buffer, { type: 'buffer' });
-  const sheetName = workbook.SheetNames[0];
-  const sheet = workbook.Sheets[sheetName];
-  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
-  const users = usersFromRows(rows);
+  const db = await getDb();
+  const rows = await db.all('SELECT * FROM users');
+  const users = rows.map((r) => ({
+    ...r,
+    verified: r.verified === 1,
+  }));
   return { version: 1, users };
-}
-
-function saveStoreToWebdav(store) {
-  const { header, rows } = storeToSheetData(store);
-  const ws = XLSX.utils.json_to_sheet(rows, { header, skipHeader: false });
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'users');
-  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 }
 
 export async function withUsersLock(fn) {
   const run = async () => {
-    let lastErr = null;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const store = await loadStore();
-      if (!Array.isArray(store.users)) store.users = [];
+    const store = await loadStore();
+    if (!Array.isArray(store.users)) store.users = [];
 
-      await fn(store);
+    await fn(store);
 
-      const client = getWebdavClient();
-      const buf = saveStoreToWebdav(store);
-      try {
-        await client.putFileContents(USERS_FILE, buf);
-        return true;
-      } catch (e) {
-        lastErr = e;
-      }
+    const db = await getDb();
+    
+    // Вставка/обновление мутированных записей
+    for (const u of store.users) {
+      await db.run(`
+        INSERT INTO users (id, email, passwordHash, verified, verifyToken, verifyExpires, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          email=excluded.email,
+          passwordHash=excluded.passwordHash,
+          verified=excluded.verified,
+          verifyToken=excluded.verifyToken,
+          verifyExpires=excluded.verifyExpires,
+          createdAt=excluded.createdAt
+      `, [u.id, u.email, u.passwordHash, u.verified ? 1 : 0, u.verifyToken, u.verifyExpires, u.createdAt]);
     }
-    throw lastErr || new Error('Не удалось обновить users.xlsx');
+
+    return true;
   };
 
   const p = queue.then(run, run);
   queue = p.catch(() => {});
-  return p;
-}
-
-// НОВОЕ: Функции для работы с реестром заявок requests.xlsx
-export async function loadRequests() {
-  const client = getWebdavClient();
-  if (!(await client.exists(REQUESTS_FILE))) return [];
-  try {
-    const buffer = await client.getFileContents(REQUESTS_FILE);
-    const workbook = XLSX.read(buffer, { type: 'buffer' });
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    return XLSX.utils.sheet_to_json(sheet, { defval: '' });
-  } catch (e) {
-    return [];
-  }
-}
-
-async function saveRequestsToWebdav(rows) {
-  const ws = XLSX.utils.json_to_sheet(rows);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'requests');
-  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-}
-
-export async function withRequestsLock(fn) {
-  const run = async () => {
-    const requests = await loadRequests();
-    await fn(requests);
-    const client = getWebdavClient();
-    const buf = await saveRequestsToWebdav(requests);
-    await client.putFileContents(REQUESTS_FILE, buf);
-  };
-  const p = requestsQueue.then(run, run);
-  requestsQueue = p.catch(() => {});
   return p;
 }

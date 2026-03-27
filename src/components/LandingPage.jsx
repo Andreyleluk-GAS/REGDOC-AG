@@ -1,7 +1,7 @@
 import React from 'react';
 import RegdocLogo from './RegdocLogo';
 
-export default function LandingPage({ onRegister, onCabinet }) {
+export default function LandingPage({ onRegister, onLogin }) {
   return (
     <div className="relative bg-white rounded-[32px] shadow-xl border border-regdoc-grey/90 overflow-hidden">
       <div className="relative px-8 pt-8 pb-10 sm:px-12 sm:pt-10 sm:pb-12">
@@ -32,7 +32,7 @@ export default function LandingPage({ onRegister, onCabinet }) {
         <div className="mt-8 sm:mt-10 flex flex-col sm:flex-row gap-3 max-w-lg mx-auto">
           <button
             type="button"
-            onClick={onCabinet}
+            onClick={onLogin}
             className="flex-1 py-4 rounded-2xl border-2 border-regdoc-navy/20 bg-white text-regdoc-navy font-bold text-base hover:border-regdoc-cyan hover:bg-regdoc-mist/50 transition-all"
           >
             Войти
