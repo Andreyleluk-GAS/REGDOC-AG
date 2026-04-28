@@ -47,9 +47,8 @@ export default function EmailAuthForm({ initialMode }) {
             setError('');
             setInfo('');
           }}
-          className={`flex-1 py-3 rounded-xl text-sm font-bold transition-all ${
-            mode === 'login' ? 'bg-white text-regdoc-navy shadow-sm' : 'text-regdoc-navy/50'
-          }`}
+          className={`flex-1 py-3 rounded-xl text-sm font-bold transition-all ${mode === 'login' ? 'bg-white text-regdoc-navy shadow-sm' : 'text-regdoc-navy/50'
+            }`}
         >
           Вход
         </button>
@@ -60,9 +59,8 @@ export default function EmailAuthForm({ initialMode }) {
             setError('');
             setInfo('');
           }}
-          className={`flex-1 py-3 rounded-xl text-sm font-bold transition-all ${
-            mode === 'register' ? 'bg-white text-regdoc-navy shadow-sm' : 'text-regdoc-navy/50'
-          }`}
+          className={`flex-1 py-3 rounded-xl text-sm font-bold transition-all ${mode === 'register' ? 'bg-white text-regdoc-navy shadow-sm' : 'text-regdoc-navy/50'
+            }`}
         >
           Регистрация
         </button>
@@ -74,7 +72,7 @@ export default function EmailAuthForm({ initialMode }) {
           <div className="relative">
             <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-regdoc-navy/30" />
             <input
-              type={email.trim() === 'admin' ? 'text' : 'email'}
+              type={['admin', 'test', 'test2'].includes(email.trim()) ? 'text' : 'email'}
               autoComplete="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}

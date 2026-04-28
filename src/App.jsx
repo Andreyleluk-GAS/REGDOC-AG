@@ -6,7 +6,7 @@ import LandingPage from './components/LandingPage';
 import EmailAuthForm from './components/EmailAuthForm';
 import { ShieldCheck, Loader2, FileText, CheckCircle2, AlertTriangle, Edit2, Check, Trash2, X, RefreshCw } from 'lucide-react';
 import { useAuth } from './context/AuthContext.jsx';
-import { authFetch } from './lib/api.js';
+import { authFetch, getToken } from './lib/api.js';
 import { useRequests } from './lib/useRequests.js';
 
 import { formatPlate, formatFIO } from './lib/formatters.js';
@@ -32,8 +32,10 @@ function Toast({ message, type = 'error', onClose }) {
 
 function App() {
   const { user, booting, banner, clearBanner, logout } = useAuth();
-  const [screen, setScreen] = useState('landing'); // 'landing' | 'register' | 'cabinet'
+  // Если токен уже сохранён — сразу открываем кабинет (минуя лендинг)
+  const [screen, setScreen] = useState(() => getToken() ? 'cabinet' : 'landing'); // 'landing' | 'register' | 'cabinet'
   const [authMode, setAuthMode] = useState('login'); // 'login' | 'register'
+  const [pendingLogin, setPendingLogin] = useState(false); // флаг: пользователь нажал "Войти", ждём форму логина
   const [editingRequest, setEditingRequest] = useState(null);
   const [activeAlert, setActiveAlert] = useState(null);
   const [toast, setToast] = useState(null); // { message, type }
@@ -64,9 +66,9 @@ function App() {
   const cta = useMemo(
     () => ({
       onRegister: () => { setEditingRequest(null); setAuthMode('register'); setScreen('register'); },
-      onLogin: () => { setAuthMode('login'); setScreen('cabinet'); },
+      onLogin: () => { setAuthMode('login'); setPendingLogin(true); setScreen('cabinet'); },
       onEditRequest: (req, docType, step = 4) => {
-        setEditingRequest({...req, targetDocType: docType, forcedStep: step});
+        setEditingRequest({ ...req, targetDocType: docType, forcedStep: step });
         setScreen('register');
       },
       onCabinet: () => setScreen('cabinet'),
@@ -80,9 +82,9 @@ function App() {
       onClick={onClick}
       title={tooltip}
       className={`flex items-center justify-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 rounded-xl text-[9px] sm:text-[10px] font-bold uppercase tracking-wider border transition-all flex-1 sm:flex-none 
-        ${isGreen ? 'bg-regdoc-mist border-regdoc-cyan/30 text-regdoc-teal hover:border-regdoc-cyan' : 
+        ${isGreen ? 'bg-regdoc-mist border-regdoc-cyan/30 text-regdoc-teal hover:border-regdoc-cyan' :
           isAmber ? 'bg-[#FFF7ED] border-[#FED7AA] text-[#FF7F50] hover:border-[#FF7F50]' :
-          'border-gray-200 text-red-500 bg-red-50 hover:border-red-300'}`}
+            'border-gray-200 text-red-500 bg-red-50 hover:border-red-300'}`}
     >
       <CheckCircle2 size={12} className={`shrink-0 ${isGreen ? 'text-regdoc-cyan' : isAmber ? 'text-[#FF7F50]' : 'text-red-400'}`} />
       <span className="whitespace-nowrap truncate">{label}</span>
@@ -110,20 +112,23 @@ function App() {
   // ─── Автоматическая навигация после логина и загрузки ───
   useEffect(() => {
     if (!user || loadingReqs) return;
-    
-    // Перенаправляем только если экран ещё не был определён (например, после логина)
+
+    // Если не аутентифицированный лендинг — перенаправляем
     if (screen === 'landing') {
-        if (requests.length > 0) {
-            setScreen('cabinet');
-        } else {
-            setScreen('register');
-        }
-    } 
-    // Если пользователь в кабинете и записей ноль (после загрузки или удаления)
-    else if (screen === 'cabinet' && requests.length === 0 && !loadingReqs) {
-        setScreen('register');
+      // Всегда открываем кабинет (список заявок) — не перенаправляем на форму регистрации
+      setScreen('cabinet');
     }
-  }, [user, requests.length, loadingReqs, screen]); 
+    // Больше НЕ перенаправляем с кабинета на регистрацию — всегда показываем список заявок
+  }, [user, loadingReqs, screen]);
+
+  // ─── Если токен есть, но юзера ещё нет (booting) — не гнать на лендинг ───
+  useEffect(() => {
+    // Не возвращать на landing если пользователь явно запросил форму входа
+    if (!booting && !user && screen === 'cabinet' && !pendingLogin) {
+      // Токен протух или недействителен — возвращаем на лендинг
+      setScreen('landing');
+    }
+  }, [booting, user, screen, pendingLogin]);
 
   const handleFlowComplete = useCallback(() => {
     setEditingRequest(null);
@@ -164,9 +169,19 @@ function App() {
   }, [selectedNewEmail, optimisticEditEmail, showToast]);
 
   const needAuth = screen === 'register' || screen === 'cabinet';
-  const showLogin = needAuth && !user && !booting;
+  const showLogin = pendingLogin && !user && !booting;
 
-  if (booting && needAuth) {
+  // ─── Если пользователь нажал "Войти" и залогинился — показываем кабинет ───
+  useEffect(() => {
+    if (user && pendingLogin) {
+      setPendingLogin(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, pendingLogin]);
+
+  // Показываем экран загрузки только если это НЕ запрос на вход (pendingLogin)
+  // и если нужна авторизация
+  if (booting && needAuth && !pendingLogin) {
     return (
       <div className="min-h-screen p-4 sm:p-8 font-sans text-regdoc-navy flex items-center justify-center">
         <div className="flex flex-col items-center gap-3 text-regdoc-navy/70">
@@ -181,40 +196,40 @@ function App() {
     <div className="min-h-screen p-4 sm:p-8 font-sans text-regdoc-navy">
       <div className="max-w-2xl mx-auto space-y-6">
         {screen !== 'landing' && (
-        <header className="mb-2 sm:mb-4">
-          <div className="flex flex-row items-center justify-between gap-2">
-            <RegdocLogo size="compact" />
-            <div className="flex items-center justify-end gap-2 shrink-0">
-              {user && (
-                <span className="text-xs font-medium text-regdoc-navy/55 max-w-[200px] truncate hidden sm:inline">
-                  {user.email}
-                </span>
-              )}
-              {user && (
-                <button
-                  type="button"
-                  onClick={logout}
-                  className="px-4 py-2 rounded-2xl border border-regdoc-grey/60 bg-white/70 text-regdoc-navy font-bold text-sm hover:bg-white transition-all"
-                >
-                  Выйти
-                </button>
-              )}
-              {screen === 'register' && (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    await reloadRequests();
-                    if (requests.length > 0) cta.onCabinet();
-                    else showToast('У вас еще нет заявок', 'error');
-                  }}
-                  className={`px-4 py-2 rounded-2xl border border-regdoc-grey/60 font-bold text-sm transition-all ${requests.length > 0 ? "bg-white/70 text-regdoc-navy hover:bg-white" : "bg-gray-100 text-gray-400 opacity-50 cursor-not-allowed"}`}
-                >
-                  К списку заявок
-                </button>
-              )}
+          <header className="mb-2 sm:mb-4">
+            <div className="flex flex-row items-center justify-between gap-2">
+              <RegdocLogo size="compact" />
+              <div className="flex items-center justify-end gap-2 shrink-0">
+                {user && (
+                  <span className="text-xs font-medium text-regdoc-navy/55 max-w-[200px] truncate hidden sm:inline">
+                    {user.email}
+                  </span>
+                )}
+                {user && (
+                  <button
+                    type="button"
+                    onClick={logout}
+                    className="px-4 py-2 rounded-2xl border border-regdoc-grey/60 bg-white/70 text-regdoc-navy font-bold text-sm hover:bg-white transition-all"
+                  >
+                    Выйти
+                  </button>
+                )}
+                {screen === 'register' && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await reloadRequests();
+                      if (requests.length > 0) cta.onCabinet();
+                      else showToast('У вас еще нет заявок', 'error');
+                    }}
+                    className={`px-4 py-2 rounded-2xl border border-regdoc-grey/60 font-bold text-sm transition-all ${requests.length > 0 ? "bg-white/70 text-regdoc-navy hover:bg-white" : "bg-gray-100 text-gray-400 opacity-50 cursor-not-allowed"}`}
+                  >
+                    К списку заявок
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
-        </header>
+          </header>
         )}
 
         {banner && (
@@ -235,7 +250,7 @@ function App() {
             <div className="bg-white rounded-3xl shadow-xl border border-regdoc-grey p-6 sm:p-8">
               <div className="flex items-center justify-between mb-6">
                 <h2 className="text-xl font-bold text-regdoc-navy">
-                    {user?.email === 'admin' ? 'Все заявки' : 'Мои заявки'}
+                  {user?.email === 'admin' ? 'Все заявки' : 'Мои заявки'}
                 </h2>
                 <div className="flex items-center gap-2">
                   {/* Кнопка обновления без блокировки UI */}
@@ -254,7 +269,7 @@ function App() {
               {/* Скелетон вместо полного блокирующего спиннера */}
               {loadingReqs && requests.length === 0 ? (
                 <div className="space-y-3">
-                  {[1,2,3].map(i => (
+                  {[1, 2, 3].map(i => (
                     <div key={i} className="p-4 rounded-2xl border border-regdoc-grey bg-regdoc-grey/20 animate-pulse">
                       <div className="flex justify-between items-center gap-4">
                         <div className="space-y-2">
@@ -288,19 +303,19 @@ function App() {
                     let reqActionNeeded = false;
                     let actionDocType = 'pz';
                     if (req.file_comments) {
-                        const isAdmin = user?.email === 'admin';
-                        for (const docType of ['pz', 'pb']) {
-                            const docComments = req.file_comments[docType];
-                            if (!docComments) continue;
-                            const hasAction = Object.values(docComments).some(cData => 
-                                isAdmin ? cData.expertUnread : (cData.status === 'needs_fix' && !cData.userReply)
-                            );
-                            if (hasAction) {
-                                reqActionNeeded = true;
-                                actionDocType = docType;
-                                break;
-                            }
+                      const isAdmin = user?.email === 'admin';
+                      for (const docType of ['pz', 'pb']) {
+                        const docComments = req.file_comments[docType];
+                        if (!docComments) continue;
+                        const hasAction = Object.values(docComments).some(cData =>
+                          isAdmin ? cData.expertUnread : (cData.status === 'needs_fix' && !cData.userReply)
+                        );
+                        if (hasAction) {
+                          reqActionNeeded = true;
+                          actionDocType = docType;
+                          break;
                         }
+                      }
                     }
 
                     return (
@@ -308,83 +323,85 @@ function App() {
                         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                           <div className="shrink-0 w-full sm:w-auto">
                             <div className="flex items-start justify-between sm:justify-start gap-4">
-                                <div className="flex flex-col">
-                                    <div className="text-[10px] font-bold text-regdoc-navy/30 mb-0.5">ID: {req.ID}</div>
-                                    <div className="text-xl font-black text-regdoc-navy tracking-tight flex items-center gap-2">
-                                        {formatPlate(req.car_number)}
-                                    </div>
+                              <div className="flex flex-col">
+                                <div className="text-[10px] font-bold text-regdoc-navy/30 mb-0.5">ID: {req.ID}</div>
+                                <div className="text-xl font-black text-regdoc-navy tracking-tight flex items-center gap-2">
+                                  {formatPlate(req.car_number)}
                                 </div>
+                              </div>
 
-                                <div className="flex items-center gap-2">
-                                    {reqActionNeeded && (
-                                        <button onClick={() => cta.onEditRequest(req, actionDocType, 4)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl transition-all text-[10px] font-bold uppercase tracking-wider shadow-sm border ${user?.email === 'admin' ? 'bg-white border-regdoc-cyan/40 text-regdoc-teal hover:bg-regdoc-cyan/10' : 'bg-white border-red-300 text-red-600 hover:bg-red-50'}`}>
-                                            <AlertTriangle size={14} strokeWidth={2.5} /> {user?.email === 'admin' ? 'Новый ответ' : 'Устранить замечания'}
-                                        </button>
-                                    )}
-                                    {user?.email === 'admin' && (
-                                        <button onClick={() => setDeletingReq(req)} className="text-red-400 hover:text-red-500 transition-colors p-1" title="Удалить заявку">
-                                            <Trash2 size={16} />
-                                        </button>
-                                    )}
-                                </div>
+                              <div className="flex items-center gap-2">
+                                {reqActionNeeded && (
+                                  <button onClick={() => cta.onEditRequest(req, actionDocType, 4)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl transition-all text-[10px] font-bold uppercase tracking-wider shadow-sm border ${user?.email === 'admin' ? 'bg-white border-regdoc-cyan/40 text-regdoc-teal hover:bg-regdoc-cyan/10' : 'bg-white border-red-300 text-red-600 hover:bg-red-50'}`}>
+                                    <AlertTriangle size={14} strokeWidth={2.5} /> {user?.email === 'admin' ? 'Новый ответ' : 'Устранить замечания'}
+                                  </button>
+                                )}
+                                {user?.email === 'admin' && (
+                                  <button onClick={() => setDeletingReq(req)} className="text-red-400 hover:text-red-500 transition-colors p-1" title="Удалить заявку">
+                                    <Trash2 size={16} />
+                                  </button>
+                                )}
+                              </div>
                             </div>
 
                             <div className="flex items-center gap-2 mt-1">
-                                        <div className="text-[10px] font-bold text-regdoc-navy/40 uppercase truncate max-w-[150px]">{req.full_name?.replace(/_/g, ' ')}</div>
-                                        {user?.email === 'admin' && (
-                                            <button
-                                                onClick={() => {
-                                                    setEditingFioReqId(req.ID);
-                                                    setSelectedNewFio(req.full_name?.replace(/_/g, ' '));
-                                                }}
-                                                className="text-regdoc-cyan hover:text-regdoc-teal p-0.5"
-                                                title="Изменить ФИО"
-                                            >
-                                                <Edit2 size={12} />
-                                            </button>
-                                        )}
+                              <div className="text-[10px] font-bold text-regdoc-navy/40 uppercase truncate max-w-[150px]">{req.full_name?.replace(/_/g, ' ')}</div>
+                              {user?.email === 'admin' && (
+                                <button
+                                  onClick={() => {
+                                    setEditingFioReqId(req.ID);
+                                    setSelectedNewFio(req.full_name?.replace(/_/g, ' '));
+                                  }}
+                                  className="text-regdoc-cyan hover:text-regdoc-teal p-0.5"
+                                  title="Изменить ФИО"
+                                >
+                                  <Edit2 size={12} />
+                                </button>
+                              )}
                             </div>
 
                             {user?.email === 'admin' && (
-                                <div className="text-[10px] font-bold text-regdoc-cyan uppercase mt-1 flex items-center gap-2 flex-wrap">
-                                    <span>Заявитель:</span>
-                                    {editingEmailReqId === req.ID ? (
-                                        <div className="flex items-center gap-1">
-                                            <select
-                                                value={selectedNewEmail}
-                                                onChange={e => setSelectedNewEmail(e.target.value)}
-                                                className="bg-white border border-regdoc-cyan rounded text-[10px] px-1 py-0.5 text-regdoc-navy outline-none"
-                                            >
-                                                <option value="">Выберите email</option>
-                                                {allEmails.map(em => (
-                                                    <option key={em} value={em}>{em}</option>
-                                                ))}
-                                            </select>
-                                            {selectedNewEmail && selectedNewEmail !== req.email && (
-                                                <button onClick={() => handleApplyEmailChange(req)} className="p-0.5 bg-regdoc-cyan text-white rounded hover:bg-regdoc-teal transition-all">
-                                                    <Check size={12} strokeWidth={3} />
-                                                </button>
-                                            )}
-                                            <button onClick={() => setEditingEmailReqId(null)} className="p-0.5 bg-regdoc-grey text-regdoc-navy rounded hover:bg-gray-300 transition-all">
-                                                ✕
-                                            </button>
-                                        </div>
-                                    ) : (
-                                        <div className="flex items-center gap-1">
-                                            <span className="text-regdoc-navy">{req.email}</span>
-                                            <button
-                                                onClick={() => {
-                                                    setEditingEmailReqId(req.ID);
-                                                    setSelectedNewEmail(req.email);
-                                                }}
-                                                className="text-regdoc-cyan hover:text-regdoc-teal"
-                                                title="Изменить заявителя"
-                                            >
-                                                <Edit2 size={12} />
-                                            </button>
-                                        </div>
+                              <div className="text-[10px] font-bold text-regdoc-cyan uppercase mt-1 flex items-center gap-2 flex-wrap">
+                                <span>Заявитель:</span>
+                                {editingEmailReqId === req.ID ? (
+                                  <div className="flex items-center gap-1">
+                                    <select
+                                      value={selectedNewEmail}
+                                      onChange={e => setSelectedNewEmail(e.target.value)}
+                                      className="bg-white border border-regdoc-cyan rounded text-sm px-3 py-2 text-regdoc-navy outline-none"
+                                    >
+                                      <option value="">Выберите заявителя</option>
+                                      <option value="admin">admin</option>
+                                      <option value="test">test</option>
+                                      {allEmails.map(em => (
+                                        <option key={em} value={em}>{em}</option>
+                                      ))}
+                                    </select>
+                                    {selectedNewEmail && selectedNewEmail !== req.email && (
+                                      <button onClick={() => handleApplyEmailChange(req)} className="p-0.5 bg-regdoc-cyan text-white rounded hover:bg-regdoc-teal transition-all">
+                                        <Check size={12} strokeWidth={3} />
+                                      </button>
                                     )}
-                                </div>
+                                    <button onClick={() => setEditingEmailReqId(null)} className="p-0.5 bg-regdoc-grey text-regdoc-navy rounded hover:bg-gray-300 transition-all">
+                                      ✕
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-1">
+                                    <span className="text-regdoc-navy">{req.email}</span>
+                                    <button
+                                      onClick={() => {
+                                        setEditingEmailReqId(req.ID);
+                                        setSelectedNewEmail(req.email);
+                                      }}
+                                      className="text-regdoc-cyan hover:text-regdoc-teal"
+                                      title="Изменить заявителя"
+                                    >
+                                      <Edit2 size={12} />
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
                             )}
 
                           </div>
@@ -449,11 +466,11 @@ function App() {
                     <Trash2 className="w-16 h-16 mx-auto mb-4 sm:mb-6 text-red-500" />
                     <h3 className="text-lg sm:text-xl font-bold text-regdoc-navy mb-2 sm:mb-3">Удалить заявку?</h3>
                     <p className="text-xs sm:text-sm text-regdoc-navy/70 mb-6 sm:mb-8 px-2">
-                      Вы уверены, что хотите удалить заявку <strong>{formatPlate(deletingReq.car_number)}</strong> ({deletingReq.full_name?.replace(/_/g, ' ')})?<br/><br/>Это действие сотрет все файлы с сервера без возможности восстановления.
+                      Вы уверены, что хотите удалить заявку <strong>{formatPlate(deletingReq.car_number)}</strong> ({deletingReq.full_name?.replace(/_/g, ' ')})?<br /><br />Это действие сотрет все файлы с сервера без возможности восстановления.
                     </p>
                     <div className="flex gap-3">
-                        <button onClick={() => setDeletingReq(null)} className="flex-1 py-2.5 sm:py-3 bg-regdoc-grey text-regdoc-navy font-bold rounded-xl hover:bg-gray-300 transition-all text-sm">Отмена</button>
-                        <button onClick={confirmDeleteRequest} className="flex-1 py-2.5 sm:py-3 bg-red-500 text-white font-bold rounded-xl hover:bg-red-600 transition-all text-sm shadow-md">Удалить</button>
+                      <button onClick={() => setDeletingReq(null)} className="flex-1 py-2.5 sm:py-3 bg-regdoc-grey text-regdoc-navy font-bold rounded-xl hover:bg-gray-300 transition-all text-sm">Отмена</button>
+                      <button onClick={confirmDeleteRequest} className="flex-1 py-2.5 sm:py-3 bg-red-500 text-white font-bold rounded-xl hover:bg-red-600 transition-all text-sm shadow-md">Удалить</button>
                     </div>
                   </div>
                 </div>
@@ -464,46 +481,46 @@ function App() {
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
                   <div className="bg-white rounded-3xl p-6 sm:p-8 max-w-sm w-full shadow-2xl border border-regdoc-grey">
                     <div className="flex items-center gap-3 mb-6">
-                        <div className="p-3 bg-regdoc-mist rounded-2xl text-regdoc-cyan">
-                            <Edit2 size={24} />
-                        </div>
-                        <div>
-                            <h3 className="text-lg font-bold text-regdoc-navy leading-none">Изменить ФИО</h3>
-                            <p className="text-[10px] font-bold text-regdoc-navy/30 uppercase mt-1">Для заявки {requests.find(r => r.ID === editingFioReqId)?.car_number}</p>
-                        </div>
+                      <div className="p-3 bg-regdoc-mist rounded-2xl text-regdoc-cyan">
+                        <Edit2 size={24} />
+                      </div>
+                      <div>
+                        <h3 className="text-lg font-bold text-regdoc-navy leading-none">Изменить ФИО</h3>
+                        <p className="text-[10px] font-bold text-regdoc-navy/30 uppercase mt-1">Для заявки {requests.find(r => r.ID === editingFioReqId)?.car_number}</p>
+                      </div>
                     </div>
-                    
-                    <div className="space-y-4">
-                        <div className="space-y-1.5">
-                            <label className="text-[10px] font-bold text-regdoc-navy/45 uppercase ml-1 tracking-wider">ФИО ИЛИ НАЗВАНИЕ</label>
-                            <input 
-                                type="text"
-                                value={selectedNewFio}
-                                onChange={e => setSelectedNewFio(formatFIO(e.target.value))}
-                                onKeyDown={e => { 
-                                    if (e.key === 'Enter') handleApplyFioChange(requests.find(r => r.ID === editingFioReqId)); 
-                                    if (e.key === 'Escape') setEditingFioReqId(null); 
-                                }}
-                                className="w-full p-4 bg-regdoc-grey/40 border border-regdoc-grey rounded-2xl outline-none focus:border-regdoc-cyan focus:bg-white transition-all text-regdoc-navy font-bold"
-                                placeholder="Иванов Иван Иванович"
-                                autoFocus
-                            />
-                        </div>
 
-                        <div className="flex gap-3 pt-2">
-                            <button 
-                                onClick={() => setEditingFioReqId(null)} 
-                                className="flex-1 py-3 bg-regdoc-grey text-regdoc-navy font-bold rounded-xl hover:bg-gray-300 transition-all text-sm"
-                            >
-                                Отмена
-                            </button>
-                            <button 
-                                onClick={() => handleApplyFioChange(requests.find(r => r.ID === editingFioReqId))} 
-                                className="flex-1 py-3 bg-regdoc-cyan text-white font-bold rounded-xl hover:bg-regdoc-teal transition-all text-sm shadow-md"
-                            >
-                                Сохранить
-                            </button>
-                        </div>
+                    <div className="space-y-4">
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-regdoc-navy/45 uppercase ml-1 tracking-wider">ФИО ИЛИ НАЗВАНИЕ</label>
+                        <input
+                          type="text"
+                          value={selectedNewFio}
+                          onChange={e => setSelectedNewFio(formatFIO(e.target.value))}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') handleApplyFioChange(requests.find(r => r.ID === editingFioReqId));
+                            if (e.key === 'Escape') setEditingFioReqId(null);
+                          }}
+                          className="w-full p-4 bg-regdoc-grey/40 border border-regdoc-grey rounded-2xl outline-none focus:border-regdoc-cyan focus:bg-white transition-all text-regdoc-navy font-bold"
+                          placeholder="Иванов Иван Иванович"
+                          autoFocus
+                        />
+                      </div>
+
+                      <div className="flex gap-3 pt-2">
+                        <button
+                          onClick={() => setEditingFioReqId(null)}
+                          className="flex-1 py-3 bg-regdoc-grey text-regdoc-navy font-bold rounded-xl hover:bg-gray-300 transition-all text-sm"
+                        >
+                          Отмена
+                        </button>
+                        <button
+                          onClick={() => handleApplyFioChange(requests.find(r => r.ID === editingFioReqId))}
+                          className="flex-1 py-3 bg-regdoc-cyan text-white font-bold rounded-xl hover:bg-regdoc-teal transition-all text-sm shadow-md"
+                        >
+                          Сохранить
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
