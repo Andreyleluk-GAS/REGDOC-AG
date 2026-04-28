@@ -508,7 +508,8 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
                 verifyData.append('verifiedFiles', JSON.stringify(verifiedFiles));
                 await authFetch('/api/upload', { method: 'POST', body: verifyData });
 
-                showAlert("Сохранено", "Изменения успешно сохранены.", "info");
+                console.log('🔥 handleSaveForEdit: вызываю setShowSuccess(true) вместо showAlert 🔥');
+                setShowSuccess(true);
                 setHasUnsavedChanges(false);
                 if (callback) callback();
             } else {
@@ -963,6 +964,7 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
 
 
             {showSuccess && (
+                console.log('🔥 РЕНДЕР НОВОГО ОКНА СОХРАНЕНИЯ 🔥'),
                 <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/40 w-screen h-screen">
                     <div className="bg-white rounded-2xl p-6 sm:p-8 max-w-md w-[90%] shadow-2xl relative">
                         <div className="flex justify-center mb-4">

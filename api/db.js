@@ -54,7 +54,8 @@ export const getDb = async () => {
     );
   `);
 
-  try { await cachedDb.exec(`ALTER TABLE requests ADD COLUMN file_comments TEXT;`); } catch(e) {}
+  try { await cachedDb.exec(`ALTER TABLE requests ADD COLUMN file_comments TEXT;`); } catch (e) { }
+  try { await cachedDb.exec(`ALTER TABLE requests ADD COLUMN isPzAccepted TEXT DEFAULT 'no';`); } catch (e) { }
 
   return cachedDb;
 };

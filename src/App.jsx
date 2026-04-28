@@ -57,6 +57,7 @@ function App() {
     optimisticDelete,
     optimisticEditFio,
     optimisticEditEmail,
+    optimisticTogglePzAccepted,
   } = useRequests();
 
   const showToast = useCallback((message, type = 'error') => {
@@ -407,13 +408,67 @@ function App() {
                           </div>
                           <div className="flex flex-col gap-2 w-full sm:w-auto items-end">
                             <div className="flex gap-2 w-full sm:w-auto">
-                              <StatusBadge
-                                label="Документы ПЗ"
-                                isGreen={req.isVerified_PZ === 'yes'}
-                                isAmber={req.type_PZ === 'yes' && req.isVerified_PZ !== 'yes'}
-                                onClick={() => cta.onEditRequest(req, 'pz', req.type_PZ === 'yes' ? 4 : 3)}
-                                tooltip={req.isVerified_PZ !== 'yes' ? (req.type_PZ === 'yes' ? "Ожидает проверки" : "Не хватает документов") : "Проверено"}
-                              />
+                              {/* ПЛАШКА "ДОКУМЕНТЫ ПЗ" С ДИНАМИЧЕСКИМИ ЦВЕТАМИ И ГАЛОЧКОЙ АДМИНА */}
+                              {(() => {
+                                const isAccepted = req.isPzAccepted === 'yes';
+                                const isPzCreated = req.type_PZ === 'yes';
+                                const hasPzFiles = req.hasFiles_PZ === 'yes';
+
+                                // Определяем цвет плашки
+                                let badgeClass = 'border-gray-300 text-gray-400 bg-gray-50'; // СЕРАЯ - по умолчанию
+                                let iconColor = 'text-gray-400';
+
+                                if (isAccepted) {
+                                  badgeClass = 'border-green-500 text-green-600 bg-green-50'; // ЗЕЛЕНАЯ - принято админом
+                                  iconColor = 'text-green-500';
+                                } else if (isPzCreated) {
+                                  if (hasPzFiles) {
+                                    badgeClass = 'border-yellow-500 text-yellow-600 bg-yellow-50'; // ЖЕЛТАЯ - в процессе
+                                    iconColor = 'text-yellow-500';
+                                  } else {
+                                    badgeClass = 'border-red-500 text-red-500 bg-red-50'; // КРАСНАЯ - создана, но пустая
+                                    iconColor = 'text-red-400';
+                                  }
+                                }
+
+                                // Tooltip
+                                let tooltip = 'ПЗ еще не создана';
+                                if (isAccepted) tooltip = '✓ Принято администратором';
+                                else if (isPzCreated) {
+                                  if (hasPzFiles) tooltip = 'Документы загружены - ожидают проверки';
+                                  else tooltip = 'ПЗ создана, но документы не загружены';
+                                }
+
+                                return (
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      onClick={() => cta.onEditRequest(req, 'pz', req.type_PZ === 'yes' ? 4 : 3)}
+                                      title={tooltip}
+                                      className={`flex items-center justify-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 rounded-xl text-[9px] sm:text-[10px] font-bold uppercase tracking-wider border transition-all flex-1 sm:flex-none ${badgeClass}`}
+                                    >
+                                      <CheckCircle2 size={12} className={`shrink-0 ${iconColor}`} />
+                                      {isAccepted && <Check size={10} className="shrink-0 text-green-500" strokeWidth={3} />}
+                                      <span className="whitespace-nowrap truncate">Документы ПЗ</span>
+                                    </button>
+                                    {/* Галочка админа для подтверждения ПЗ */}
+                                    {user?.email === 'admin' && isPzCreated && (
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          optimisticTogglePzAccepted(req, (msg) => showToast(msg));
+                                        }}
+                                        title={isAccepted ? 'Отменить подтверждение ПЗ' : 'Подтвердить ПЗ (принято админом)'}
+                                        className={`p-1.5 rounded-lg border transition-all ${isAccepted
+                                            ? 'bg-green-100 border-green-400 text-green-600 hover:bg-green-200'
+                                            : 'bg-white border-gray-300 text-gray-400 hover:bg-green-50 hover:border-green-400 hover:text-green-600'
+                                          }`}
+                                      >
+                                        <Check size={14} strokeWidth={isAccepted ? 3 : 2} />
+                                      </button>
+                                    )}
+                                  </div>
+                                );
+                              })()}
                               <StatusBadge
                                 label="ПЗ"
                                 isGreen={isPZ_Ready}

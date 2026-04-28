@@ -279,6 +279,31 @@ app.post('/api/requests/change-email', async (req, res) => {
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+// ========== TOGGLE PZ ACCEPTED (Admin only) ==========
+app.post('/api/requests/toggle-pz-accepted', async (req, res) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' });
+        const token = authHeader.split(' ')[1];
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'dev-only-change-JWT_SECRET-in-env');
+        if (decoded.email !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+        const { id } = req.body;
+        if (!id) return res.status(400).json({ error: 'ID missing' });
+
+        let newStatus = 'no';
+        await withRequestsLock(async (requests) => {
+            const idx = requests.findIndex(r => String(r.ID) === String(id));
+            if (idx === -1) throw new Error('Request not found');
+            const current = requests[idx].isPzAccepted === 'yes';
+            requests[idx].isPzAccepted = current ? 'no' : 'yes';
+            newStatus = requests[idx].isPzAccepted;
+            console.log(`[toggle-pz-accepted] Request ${id}: ${current ? 'unapproved' : 'approved'}`);
+        });
+
+        res.json({ success: true, isPzAccepted: newStatus });
+    } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
 app.post('/api/requests/verify-file', async (req, res) => {
     try {
         const authHeader = req.headers.authorization;
@@ -613,9 +638,29 @@ app.get('/api/check-plate', async (req, res) => {
 });
 
 async function createDirWithRetry(path) {
-    if (await client.exists(path) === false) {
-        await client.createDirectory(path);
-        await sleep(300);
+    console.log('[createDirWithRetry] Checking path:', path);
+    try {
+        const exists = await client.exists(path);
+        console.log('[createDirWithRetry] exists:', exists);
+        if (exists === false) {
+            console.log('[createDirWithRetry] Creating directory:', path);
+            await client.createDirectory(path);
+            console.log('[createDirWithRetry] Directory created');
+            await sleep(300);
+        } else {
+            console.log('[createDirWithRetry] Directory already exists, skip');
+        }
+    } catch (e) {
+        console.error('[createDirWithRetry] Error:', e.message);
+        // Пробуем создать даже если exists() выбросил ошибку
+        try {
+            console.log('[createDirWithRetry] Trying to create anyway:', path);
+            await client.createDirectory(path);
+            console.log('[createDirWithRetry] Force-created directory');
+            await sleep(300);
+        } catch (e2) {
+            console.error('[createDirWithRetry] Force-create failed:', e2.message);
+        }
     }
 }
 
@@ -744,12 +789,30 @@ app.post('/api/upload', upload.any(), async (req, res) => {
 
         if (step === 'single_file') {
             const file = req.files[0];
+            console.log('[upload:single_file] START - folderName:', folderName, 'docType:', docType, 'originalName:', file.originalname);
+
+            // === ИСПРАВЛЕНО: Сначала создаём ВСЕ нужные папки ===
+            // 1. Главная папка заявки
+            if (!(await client.exists(clientPath))) {
+                console.log('[upload:single_file] Creating main folder:', clientPath);
+                await client.createDirectory(clientPath);
+                await sleep(300);
+            }
+            // 2. Подпапка Для ПЗ / Для ПБ
+            if (!(await client.exists(finalPath))) {
+                console.log('[upload:single_file] Creating sub folder:', finalPath);
+                await client.createDirectory(finalPath);
+                await sleep(300);
+            }
+
             const russianNames = { 'passport': 'ПАСПОРТ', 'snils': 'СНИЛС', 'sts': 'СТС', 'pts': 'ПТС', 'egrn': 'ВЫПИСКА_ЕГРН', 'balloon_passport': 'ПАСПОРТ_БАЛЛОНА', 'act_opresovki': 'АКТ_ОПРЕССОВКИ', 'cert_gbo': 'СЕРТИФИКАТ_ГБО', 'cert_balloon': 'СЕРТИФИКАТ_БАЛЛОНА', 'pte': 'ПРЕДВАРИТЕЛЬНОЕ_ЗАКЛЮЧЕНИЕ', 'zd': 'ЗАЯВЛЕНИЕ_ДЕКЛАРАЦИЯ', 'form207': 'ФОРМА_207', 'gibdd_zayavlenie': 'ЗАЯВЛЕНИЕ_ГИБДД', 'photo_left': 'ФОТО_СЛЕВА', 'photo_right': 'ФОТО_СПРАВА', 'photo_rear': 'ФОТО_СЗАДИ', 'photo_front': 'ФОТО_СПЕРЕДИ', 'photo_hood': 'ФОТО_КАПОТ', 'photo_vin': 'ФОТО_VIN', 'photo_kuzov': 'ФОТО_НОМЕР_КУЗОВА', 'photo_tablichka': 'ФОТО_ТАБЛИЧКА', 'photo_balloon_place': 'ФОТО_МЕСТО_БАЛЛОНА', 'photo_balloon_tablichka': 'ФОТО_ТАБЛИЧКА_БАЛЛОНА', 'photo_vent': 'ФОТО_ВЕНТ_КАНАЛОВ', 'photo_mult': 'ФОТО_МУЛЬТ', 'photo_reduktor': 'ФОТО_РЕДУКТОР', 'photo_ebu': 'ФОТО_ЭБУ', 'photo_forsunki': 'ФОТО_ФОРСУНКИ', 'photo_vzu': 'ФОТО_ВЗУ' };
             const cat = russianNames[file.fieldname] || 'ФАЙЛ';
             let existingFileNames = [];
-            if (await client.exists(finalPath)) {
+            try {
                 const existingItems = await client.getDirectoryContents(finalPath);
                 existingFileNames = existingItems.filter(i => i.type === 'file').map(i => i.basename.toUpperCase());
+            } catch (e) {
+                console.log('[upload:single_file] Could not list dir (may be empty):', e.message);
             }
             let maxNum = 0;
             existingFileNames.forEach(name => {
@@ -761,7 +824,28 @@ app.post('/api/upload', upload.any(), async (req, res) => {
             const ext = file.originalname.split('.').pop().toLowerCase();
             const uniqueId = Date.now();
             const newFileName = `${cat}_${maxNum + 1}_${uniqueId}.${ext}`;
-            await uploadFileWithRetry(`${finalPath}/${newFileName}`, file.buffer);
+            const targetPath = `${finalPath}/${newFileName}`;
+            console.log('[upload:single_file] Uploading to:', targetPath);
+
+            // === Загрузка с retry ===
+            let uploaded = false;
+            for (let attempt = 1; attempt <= 3; attempt++) {
+                try {
+                    await client.putFileContents(targetPath, file.buffer);
+                    uploaded = true;
+                    console.log('[upload:single_file] SUCCESS on attempt', attempt, '- file:', newFileName);
+                    break;
+                } catch (e) {
+                    console.error('[upload:single_file] Attempt', attempt, 'FAILED:', e.message, 'Response:', e.response?.status, e.response?.body);
+                    if (attempt < 3) await sleep(500);
+                }
+            }
+
+            if (!uploaded) {
+                console.error('[upload:single_file] ALL ATTEMPTS FAILED for:', newFileName);
+                return res.status(500).json({ error: `Не удалось загрузить файл. Проверьте папку: ${finalPath}. Серверная ошибка: папка или файл не могут быть созданы на WebDAV.` });
+            }
+
             return res.json({ success: true, fileName: newFileName });
         }
 
