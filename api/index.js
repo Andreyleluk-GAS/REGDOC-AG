@@ -181,6 +181,64 @@ app.post('/api/verify-file', async (req, res) => {
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+/**
+ * БЕЗОПАСНОЕ рекурсивное создание структуры папок в WebDAV.
+ * Разбивает путь на части и создаёт каждую папку по очереди.
+ * Защита от: undefined, пустых путей, двойных слэшей, попытки создать корень '/'
+ */
+async function ensureDirectoryExists(targetPath) {
+    console.log('🔥 ПУТЬ ДЛЯ СОЗДАНИЯ ПАПОК:', targetPath);
+
+    // Защита от undefined или пустого пути
+    if (!targetPath || typeof targetPath !== 'string') {
+        console.error('[ensureDirectoryExists] ERROR: targetPath is invalid:', targetPath);
+        throw new Error('Путь для создания папки невалиден: ' + String(targetPath));
+    }
+
+    // Разбиваем путь, убираем пустые элементы и ведущий слэш
+    const cleanPath = targetPath.startsWith('/') ? targetPath.slice(1) : targetPath;
+    const parts = cleanPath.split('/').filter(p => p && p.trim().length > 0);
+
+    console.log('[ensureDirectoryExists] Parts:', parts);
+
+    if (parts.length === 0) {
+        console.error('[ensureDirectoryExists] ERROR: No parts to create');
+        throw new Error('Нечего создавать - путь не содержит директорий');
+    }
+
+    let currentPath = '';
+
+    for (let i = 0; i < parts.length; i++) {
+        const part = parts[i];
+        // НЕ кодируем - webdav библиотека сама кодирует при отправке HTTP
+        currentPath = '/' + parts.slice(0, i + 1).join('/');
+
+        console.log('[ensureDirectoryExists] Step', i + 1, '/', parts.length, '- checking:', currentPath);
+
+        try {
+            const exists = await client.exists(currentPath);
+            console.log('[ensureDirectoryExists] exists:', exists);
+
+            if (!exists) {
+                console.log('[ensureDirectoryExists] Creating directory:', currentPath);
+                await client.createDirectory(currentPath);
+                console.log('[ensureDirectoryExists] ✅ Created:', currentPath);
+                await sleep(300);
+            } else {
+                console.log('[ensureDirectoryExists] Already exists, skip:', currentPath);
+            }
+        } catch (error) {
+            console.error('[ensureDirectoryExists] ❌ ERROR for path:', currentPath);
+            console.error('[ensureDirectoryExists] Error message:', error.message);
+            console.error('[ensureDirectoryExists] HTTP Status:', error.response?.status);
+            console.error('[ensureDirectoryExists] Response body:', error.response?.body);
+            throw new Error(`Не удалось создать папку "${part}" в пути ${currentPath}. Сервер вернул: ${error.message}`);
+        }
+    }
+
+    console.log('[ensureDirectoryExists] ✅ END - all folders created for:', targetPath);
+}
+
 app.get('/api/health', (req, res) => {
     res.json({ ok: true, service: 'regdoc-api' });
 });
@@ -788,32 +846,66 @@ app.post('/api/upload', upload.any(), async (req, res) => {
         }
 
         if (step === 'single_file') {
+            console.log('[upload:single_file] START - folderName:', folderName, 'docType:', docType);
+
+            // === ШАГ 1: Проверка Multer/парсера файлов ===
+            if (!req.files || req.files.length === 0) {
+                console.error('[upload:single_file] FATAL: No files in request!');
+                return res.status(400).json({ error: 'Файл не получен бэкендом. Проверьте форму загрузки.' });
+            }
             const file = req.files[0];
-            console.log('[upload:single_file] START - folderName:', folderName, 'docType:', docType, 'originalName:', file.originalname);
+            console.log('[upload:single_file] File received:', {
+                fieldname: file.fieldname,
+                originalname: file.originalname,
+                size: file.size,
+                mimetype: file.mimetype,
+                bufferLength: file.buffer ? file.buffer.length : 'NO_BUFFER'
+            });
 
-            // === ИСПРАВЛЕНО: Сначала создаём ВСЕ нужные папки ===
-            // 1. Главная папка заявки
-            if (!(await client.exists(clientPath))) {
-                console.log('[upload:single_file] Creating main folder:', clientPath);
-                await client.createDirectory(clientPath);
-                await sleep(300);
-            }
-            // 2. Подпапка Для ПЗ / Для ПБ
-            if (!(await client.exists(finalPath))) {
-                console.log('[upload:single_file] Creating sub folder:', finalPath);
-                await client.createDirectory(finalPath);
-                await sleep(300);
+            if (!file.buffer || file.buffer.length === 0) {
+                console.error('[upload:single_file] FATAL: Buffer is empty!');
+                return res.status(400).json({ error: 'Файл пустой или повреждён.' });
             }
 
+            // === ШАГ 2: Проверка WebDAV авторизации ===
+            console.log('[upload:single_file] Checking WebDAV client...');
+            try {
+                const testPath = '/RegDoc_Заявки';
+                const rootExists = await client.exists(testPath);
+                console.log('[upload:single_file] WebDAV auth OK - root exists:', rootExists);
+            } catch (authErr) {
+                console.error('[upload:single_file] WebDAV AUTH ERROR:', authErr.message);
+                console.error('[upload:single_file] WebDAV Status:', authErr.response?.status);
+                console.error('[upload:single_file] WebDAV Body:', authErr.response?.body);
+                return res.status(503).json({ error: 'Ошибка авторизации облака: ' + authErr.message });
+            }
+
+            // === ШАГ 3: Создание папок (ensureDirectoryExists) ===
+            try {
+                console.log('[upload:single_file] Ensuring clientPath:', clientPath);
+                await ensureDirectoryExists(clientPath);
+                console.log('[upload:single_file] Ensuring finalPath:', finalPath);
+                await ensureDirectoryExists(finalPath);
+            } catch (ensureErr) {
+                console.error('[upload:single_file] FATAL: Failed to create directory structure:', ensureErr.message);
+                return res.status(500).json({ error: 'Ошибка создания папок: ' + ensureErr.message });
+            }
+
+            // === ШАГ 4: Генерация имени файла ===
             const russianNames = { 'passport': 'ПАСПОРТ', 'snils': 'СНИЛС', 'sts': 'СТС', 'pts': 'ПТС', 'egrn': 'ВЫПИСКА_ЕГРН', 'balloon_passport': 'ПАСПОРТ_БАЛЛОНА', 'act_opresovki': 'АКТ_ОПРЕССОВКИ', 'cert_gbo': 'СЕРТИФИКАТ_ГБО', 'cert_balloon': 'СЕРТИФИКАТ_БАЛЛОНА', 'pte': 'ПРЕДВАРИТЕЛЬНОЕ_ЗАКЛЮЧЕНИЕ', 'zd': 'ЗАЯВЛЕНИЕ_ДЕКЛАРАЦИЯ', 'form207': 'ФОРМА_207', 'gibdd_zayavlenie': 'ЗАЯВЛЕНИЕ_ГИБДД', 'photo_left': 'ФОТО_СЛЕВА', 'photo_right': 'ФОТО_СПРАВА', 'photo_rear': 'ФОТО_СЗАДИ', 'photo_front': 'ФОТО_СПЕРЕДИ', 'photo_hood': 'ФОТО_КАПОТ', 'photo_vin': 'ФОТО_VIN', 'photo_kuzov': 'ФОТО_НОМЕР_КУЗОВА', 'photo_tablichka': 'ФОТО_ТАБЛИЧКА', 'photo_balloon_place': 'ФОТО_МЕСТО_БАЛЛОНА', 'photo_balloon_tablichka': 'ФОТО_ТАБЛИЧКА_БАЛЛОНА', 'photo_vent': 'ФОТО_ВЕНТ_КАНАЛОВ', 'photo_mult': 'ФОТО_МУЛЬТ', 'photo_reduktor': 'ФОТО_РЕДУКТОР', 'photo_ebu': 'ФОТО_ЭБУ', 'photo_forsunki': 'ФОТО_ФОРСУНКИ', 'photo_vzu': 'ФОТО_ВЗУ' };
             const cat = russianNames[file.fieldname] || 'ФАЙЛ';
+
+            // Получаем список существующих файлов
             let existingFileNames = [];
             try {
                 const existingItems = await client.getDirectoryContents(finalPath);
                 existingFileNames = existingItems.filter(i => i.type === 'file').map(i => i.basename.toUpperCase());
+                console.log('[upload:single_file] Existing files:', existingFileNames);
             } catch (e) {
-                console.log('[upload:single_file] Could not list dir (may be empty):', e.message);
+                console.log('[upload:single_file] Could not list dir:', e.message);
             }
+
+            // Ищем максимальный номер
             let maxNum = 0;
             existingFileNames.forEach(name => {
                 if (name.startsWith(cat + '_')) {
@@ -821,29 +913,47 @@ app.post('/api/upload', upload.any(), async (req, res) => {
                     if (parts.length > 1) { const num = parseInt(parts[1]); if (!isNaN(num) && num > maxNum) maxNum = num; }
                 }
             });
+
+            // Формируем новое имя файла (НЕ меняем оригинальное имя, только добавляем префикс)
             const ext = file.originalname.split('.').pop().toLowerCase();
             const uniqueId = Date.now();
             const newFileName = `${cat}_${maxNum + 1}_${uniqueId}.${ext}`;
-            const targetPath = `${finalPath}/${newFileName}`;
-            console.log('[upload:single_file] Uploading to:', targetPath);
 
-            // === Загрузка с retry ===
+            // Убеждаемся что путь не содержит двойных слэшей
+            const targetPath = `${finalPath}/${newFileName}`.replace(/\/+/g, '/');
+            console.log('[upload:single_file] Target path (cleaned):', targetPath);
+
+            // === ШАГ 5: Загрузка с retry ===
             let uploaded = false;
+            let lastError = null;
             for (let attempt = 1; attempt <= 3; attempt++) {
                 try {
+                    console.log(`[upload:single_file] Uploading (attempt ${attempt}/3)...`);
                     await client.putFileContents(targetPath, file.buffer);
                     uploaded = true;
-                    console.log('[upload:single_file] SUCCESS on attempt', attempt, '- file:', newFileName);
+                    console.log('[upload:single_file] ✅ SUCCESS on attempt', attempt, '- file:', newFileName);
+
+                    // Подтверждаем что файл загружен - проверяем его наличие
+                    const exists = await client.exists(targetPath);
+                    console.log('[upload:single_file] File exists after upload:', exists);
                     break;
                 } catch (e) {
-                    console.error('[upload:single_file] Attempt', attempt, 'FAILED:', e.message, 'Response:', e.response?.status, e.response?.body);
+                    lastError = e;
+                    console.error(`[upload:single_file] ❌ Attempt ${attempt} FAILED:`, e.message);
+                    console.error('[upload:single_file] HTTP Status:', e.response?.status);
+                    console.error('[upload:single_file] Response body:', e.response?.body);
                     if (attempt < 3) await sleep(500);
                 }
             }
 
             if (!uploaded) {
-                console.error('[upload:single_file] ALL ATTEMPTS FAILED for:', newFileName);
-                return res.status(500).json({ error: `Не удалось загрузить файл. Проверьте папку: ${finalPath}. Серверная ошибка: папка или файл не могут быть созданы на WebDAV.` });
+                console.error('[upload:single_file] 💀 ALL ATTEMPTS FAILED');
+                console.error('[upload:single_file] Last error:', lastError?.message);
+                console.error('[upload:single_file] Last error status:', lastError?.response?.status);
+                return res.status(500).json({
+                    error: `Ошибка WebDAV: ${lastError?.message || 'Неизвестная ошибка'}`,
+                    details: lastError?.response?.body || lastError?.message
+                });
             }
 
             return res.json({ success: true, fileName: newFileName });
