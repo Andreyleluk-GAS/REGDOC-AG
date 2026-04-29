@@ -623,6 +623,7 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
             if (clientType === 'legal' && !formData.companyName) return showAlert("Внимание", "Пожалуйста, укажите название компании", "info");
             if (!validateFullName(formData.fullName)) return showAlert("Неверный формат", "Заполните ФИО полностью на русском языке (как в паспорте)", "error");
 
+            // Если папка ещё не создана - создаём её через /api/init-folder
             if (!activeFolderName) {
                 setIsSubmitting(true);
                 const data = new FormData();
@@ -635,28 +636,70 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
                 try {
                     const res = await authFetch('/api/upload', { method: 'POST', body: data });
                     const json = await res.json();
-                    if (json.success) setActiveFolderName(json.folderName);
+                    if (json.success && json.folderName) {
+                        const newFolderName = json.folderName;
+
+                        // СРАЗУ создаём папку на сервере через /api/init-folder
+                        console.log('[handleNextStep] Создаю главную папку:', newFolderName);
+                        const folderPath = `/RegDoc_Заявки/${newFolderName}`;
+                        const initRes = await authFetch('/api/init-folder', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ path: folderPath })
+                        });
+                        const initJson = await initRes.json();
+                        console.log('[handleNextStep] init-folder result:', initJson);
+
+                        if (initJson.success || initJson.error?.includes('already exists')) {
+                            setActiveFolderName(newFolderName);
+                            setIsSubmitting(false);
+                            setCurrentStep(3);
+                            return;
+                        } else {
+                            setIsSubmitting(false);
+                            return showAlert("Ошибка", initJson.error || "Не удалось создать папку в облаке", "error");
+                        }
+                    }
                 } catch (e) {
                     setIsSubmitting(false);
                     return showAlert("Ошибка", "Не удалось создать папку на сервере", "error");
                 }
                 setIsSubmitting(false);
             }
+
+            // Если папка уже есть - просто переходим
+            setCurrentStep(3);
+            return;
         }
 
         if (currentStep === 3) {
-            setIsSubmitting(true);
-            const data = new FormData();
-            data.append('step', 'sub_folder');
-            data.append('folderName', activeFolderName);
-            data.append('docType', docType);
-            try {
-                await authFetch('/api/upload', { method: 'POST', body: data });
-            } catch (e) {
-                setIsSubmitting(false);
-                return showAlert("Ошибка", "Не удалось создать раздел услуги", "error");
+            // Перед переходом к загрузке файлов - создаём подпапку Для ПЗ или Для ПБ
+            if (activeFolderName) {
+                setIsSubmitting(true);
+                const subPath = `/RegDoc_Заявки/${activeFolderName}/${docType === 'pz' ? 'Для ПЗ' : 'Для ПБ'}`;
+                console.log('[handleNextStep] Создаю подпапку:', subPath);
+                try {
+                    const initRes = await authFetch('/api/init-folder', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ path: subPath })
+                    });
+                    const initJson = await initRes.json();
+                    console.log('[handleNextStep] init-folder sub result:', initJson);
+
+                    if (initJson.success || initJson.error?.includes('already exists')) {
+                        setIsSubmitting(false);
+                        setCurrentStep(4);
+                        return;
+                    } else {
+                        setIsSubmitting(false);
+                        return showAlert("Ошибка", initJson.error || "Не удалось создать раздел услуги в облаке", "error");
+                    }
+                } catch (e) {
+                    setIsSubmitting(false);
+                    return showAlert("Ошибка", "Не удалось создать раздел услуги", "error");
+                }
             }
-            setIsSubmitting(false);
         }
 
         if (currentStep < 5) {

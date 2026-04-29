@@ -243,6 +243,47 @@ app.get('/api/health', (req, res) => {
     res.json({ ok: true, service: 'regdoc-api' });
 });
 
+// ========== ЭНДПОИНТ ИНИЦИАЛИЗАЦИИ ПАПКИ ==========
+app.post('/api/init-folder', async (req, res) => {
+    console.log('[/api/init-folder] START - body:', JSON.stringify(req.body));
+    try {
+        const { path } = req.body;
+
+        if (!path) {
+            console.error('[/api/init-folder] ERROR: path is missing');
+            return res.status(400).json({ error: 'Путь не указан' });
+        }
+
+        console.log('[/api/init-folder] Requested path:', path);
+
+        // ЗАПРЕТ: НИКАКИХ encodeURI или encodeURIComponent! WebDAV ожидает СЫРЫЕ строки
+        const targetPath = path;
+
+        try {
+            const exists = await client.exists(targetPath);
+            console.log('[/api/init-folder] exists:', exists);
+
+            if (!exists) {
+                console.log('[/api/init-folder] Creating directory:', targetPath);
+                await client.createDirectory(targetPath);
+                console.log('[/api/init-folder] ✅ SUCCESS - Created:', targetPath);
+            } else {
+                console.log('[/api/init-folder] Directory already exists, skip');
+            }
+
+            res.status(200).json({ success: true, path: targetPath });
+        } catch (webdavError) {
+            console.error('[/api/init-folder] 🔥 WebDAV ERROR:', webdavError.message);
+            console.error('[/api/init-folder] HTTP Status:', webdavError.response?.status);
+            console.error('[/api/init-folder] Response body:', webdavError.response?.body);
+            return res.status(500).json({ error: 'Не удалось создать папку в облаке: ' + webdavError.message });
+        }
+    } catch (error) {
+        console.error('[/api/init-folder] FATAL ERROR:', error.message);
+        res.status(500).json({ error: 'Внутренняя ошибка сервера: ' + error.message });
+    }
+});
+
 app.get('/api/users/emails', async (req, res) => {
     try {
         const authHeader = req.headers.authorization;
