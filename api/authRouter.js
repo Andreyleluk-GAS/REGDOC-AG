@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import {
-  findUserByEmail,
+  findUserByLogin,
   findUserById,
   createUser,
   verifyUserByToken,
@@ -44,6 +44,7 @@ function publicUser(u) {
   return {
     id: u.id,
     email: u.email,
+    username: u.username,
     verified: u.verified,
     role: u.role || 'user'
   };
@@ -116,21 +117,24 @@ router.post('/register', async (req, res) => {
 // ========== LOGIN ==========
 router.post('/login', async (req, res) => {
   try {
-    const email = normalizeEmail(req.body?.email);
+    const login = String(req.body?.email || req.body?.login || '').trim();
     const password = String(req.body?.password || '');
 
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Введите email и пароль' });
+    if (!login || !password) {
+      return res.status(400).json({ error: 'Введите email/логин и пароль' });
     }
 
-    const user = await findUserByEmail(email);
+    const user = await findUserByLogin(login);
 
     if (!user) {
-      return res.status(401).json({ error: 'Неверный email или пароль' });
+      console.log(`[login] User not found: ${login}`);
+      return res.status(401).json({ error: 'Неверный логин или пароль' });
     }
 
-    if (!bcrypt.compareSync(password, user.password_hash)) {
-      return res.status(401).json({ error: 'Неверный email или пароль' });
+    const passwordMatch = bcrypt.compareSync(password, user.password_hash);
+    if (!passwordMatch) {
+      console.log(`[login] Password mismatch for: ${login}`);
+      return res.status(401).json({ error: 'Неверный логин или пароль' });
     }
 
     if (!user.verified) {
@@ -141,7 +145,12 @@ router.post('/login', async (req, res) => {
     }
 
     const token = signToken(user);
-    return res.json({ ok: true, token, user: publicUser(user) });
+    console.log(`[login] Success: ${login}`);
+    return res.json({
+      ok: true,
+      token,
+      user: publicUser(user)
+    });
   } catch (e) {
     console.error("🔥 ОШИБКА ЛОГИНА:", e);
     return res.status(500).json({ error: "Ошибка сервера: " + e.message });
