@@ -2,12 +2,10 @@ import 'dotenv/config';
 import express from 'express';
 import multer from 'multer';
 import cors from 'cors';
-import { createClient } from 'webdav';
 import { Document, Packer, Paragraph, TextRun } from 'docx';
 import jwt from 'jsonwebtoken';
 import authRouter from './authRouter.js';
-import { loadStore, migrateUsersFromWebdav } from './userStore.js';
-import { loadRequests, withRequestsLock, migrateLocalJsonToSQLite, isDuplicate, getNextId } from './requestsStore.js';
+import { loadRequests, withRequestsLock, getNextId } from './requestsStore.js';
 import { normalizePlate, normalizeName } from './utils.js';
 
 // ========== СЛОВАРЬ КАТЕГОРИЙ ДЛЯ КРАСИВОГО ПЕРЕИМЕНОВАНИЯ ФАЙЛОВ ==========
@@ -30,240 +28,35 @@ const upload = multer({ storage: multer.memoryStorage() });
 app.use(cors());
 app.use(express.json());
 
-const WEBDAV_REQUESTS_XLSX = '/RegDoc_Заявки/_USERS/requests.xlsx';
-
-const client = createClient('https://webdav.cloud.mail.ru/', {
-    username: process.env.VK_CLOUD_EMAIL,
-    password: process.env.VK_CLOUD_PASSWORD
-});
-
-migrateUsersFromWebdav().catch(e => console.error('[startup] users migration error:', e.message));
-migrateLocalJsonToSQLite().catch(e => console.error('[startup] requests migration error:', e.message));
-
-// ========== WebDAV HEALTH CHECK AT STARTUP ==========
-(async () => {
-    console.log('[webdav-healthcheck] Testing WebDAV connection...');
-    try {
-        const rootExists = await client.exists('/RegDoc_Заявки');
-        console.log(`✅ WebDAV connection OK - root folder exists: ${rootExists}`);
-    } catch (e) {
-        console.error('❌ WebDAV CONNECTION FAILED:', e.message);
-        if (e.response) {
-            console.error('   Response status:', e.response.status);
-            console.error('   Response body:', e.response.body);
-        }
-    }
-})();
-
-import { syncJsonToRemoteXlsx } from './requestsStore.js';
-setInterval(() => {
-    syncJsonToRemoteXlsx(client, WEBDAV_REQUESTS_XLSX).catch(e =>
-        console.error('[bg-sync] periodic sync error:', e.message)
-    );
-}, 600000);
-
-// ========== НОВЫЙ СПЕЦИАЛЬНЫЙ ЭНДПОИНТ ДЛЯ VERIFY FILE ==========
-app.post('/api/verify-file', async (req, res) => {
-    console.log('[/api/verify-file] START - body:', JSON.stringify(req.body));
-    try {
-        const { folderName, docType, fileName } = req.body;
-
-        if (!folderName) {
-            console.log('[/api/verify-file] ERROR: folderName missing');
-            return res.status(400).json({ error: 'folderName missing' });
-        }
-        if (!fileName) {
-            console.log('[/api/verify-file] ERROR: fileName missing');
-            return res.status(400).json({ error: 'fileName missing' });
-        }
-        if (!docType) {
-            console.log('[/api/verify-file] ERROR: docType missing');
-            return res.status(400).json({ error: 'docType missing' });
-        }
-
-        console.log('[/api/verify-file] Processing:', { folderName, docType, fileName });
-
-        const safeDocType = docType || 'pz';
-        const docTypeFolder = safeDocType === 'pz' ? 'Для ПЗ' : 'Для ПБ';
-        const folderPath = `/RegDoc_Заявки/${folderName}/${docTypeFolder}`;
-        const verifiedJsonPath = `${folderPath}/verified.json`;
-
-        console.log('[/api/verify-file] folderPath:', folderPath);
-        console.log('[/api/verify-file] verifiedJsonPath:', verifiedJsonPath);
-
-        // Создаём папку если её нет
-        let folderExists = false;
-        try {
-            folderExists = await client.exists(folderPath);
-            console.log('[/api/verify-file] folderExists:', folderExists);
-        } catch (e) {
-            console.log('[/api/verify-file] folderExists error:', e.message);
-        }
-        if (!folderExists) {
-            try {
-                await client.createDirectory(folderPath);
-                await sleep(500);
-                console.log('[/api/verify-file] Created folder');
-            } catch (e) {
-                console.log('[/api/verify-file] Create folder error:', e.message);
-            }
-        }
-
-        // Читаем текущий verified.json
-        let verifiedList = [];
-        try {
-            const rawContent = await client.getFileContents(verifiedJsonPath, { format: 'binary' });
-            const content = Buffer.isBuffer(rawContent) ? rawContent.toString('utf-8') : String(rawContent);
-            verifiedList = JSON.parse(content);
-            if (!Array.isArray(verifiedList)) verifiedList = [];
-            console.log('[/api/verify-file] Read existing list:', verifiedList);
-        } catch (e) {
-            console.log('[/api/verify-file] Read error (file may not exist):', e.message);
-            verifiedList = [];
-        }
-
-        // Добавляем файл если его нет
-        if (!verifiedList.includes(fileName)) {
-            verifiedList.push(fileName);
-            console.log('[/api/verify-file] Added file, new list:', verifiedList);
-        }
-
-        // Записываем в WebDAV
-        const jsonContent = JSON.stringify(verifiedList);
-        let writeSuccess = false;
-        for (let attempt = 1; attempt <= 3; attempt++) {
-            try {
-                await client.putFileContents(verifiedJsonPath, Buffer.from(jsonContent));
-                await sleep(200);
-                writeSuccess = true;
-                console.log('[/api/verify-file] WebDAV write OK, attempt:', attempt);
-                break;
-            } catch (e) {
-                console.log('[/api/verify-file] WebDAV write attempt', attempt, 'failed:', e.message);
-                await sleep(500);
-            }
-        }
-
-        if (!writeSuccess) {
-            console.log('[/api/verify-file] WebDAV write FAILED after 3 attempts');
-            return res.status(500).json({ error: 'Failed to write to WebDAV' });
-        }
-
-        // Сохраняем в БАЗУ ДАННЫХ
-        console.log('[/api/verify-file] Saving to database...');
-        try {
-            const reqId = folderName.split('_')[0];
-            await withRequestsLock(async (requests) => {
-                const idx = requests.findIndex(r => String(r.ID) === String(reqId));
-                if (idx === -1) {
-                    requests.push({ ID: reqId, DATE: new Date().toLocaleDateString('ru-RU'), full_name: '', car_number: '', email: '', verified_files: { [safeDocType]: { [fileName]: true } } });
-                    console.log('[/api/verify-file] Created new DB record');
-                } else {
-                    if (!requests[idx].verified_files) requests[idx].verified_files = {};
-                    if (!requests[idx].verified_files[safeDocType]) requests[idx].verified_files[safeDocType] = {};
-                    requests[idx].verified_files[safeDocType][fileName] = true;
-                    console.log('[/api/verify-file] Updated DB record');
-                }
-            });
-            console.log('[/api/verify-file] Database save OK');
-        } catch (e) {
-            console.error('[/api/verify-file] DB error:', e.message);
-        }
-
-        // Формируем ответ
-        const responseObj = { [safeDocType]: {} };
-        verifiedList.forEach(f => { responseObj[safeDocType][f] = true; });
-
-        const allReqs = await loadRequests();
-        const reqId = folderName.split('_')[0];
-        const dbReq = allReqs.find(r => String(r.ID) === String(reqId));
-
-        console.log('[/api/verify-file] END - success');
-        res.json({
-            success: true,
-            verified: true,
-            fileName: fileName,
-            verifiedFiles: responseObj,
-            verified_files: dbReq?.verified_files || {}
-        });
-
-    } catch (error) {
-        console.error('[/api/verify-file] EXCEPTION:', error.message);
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-// ========== КОНЕЦ НОВОГО ЭНДПОИНТА ==========
-
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-/**
- * БЕЗОПАСНОЕ рекурсивное создание структуры папок в WebDAV.
- * Разбивает путь на части и создаёт каждую папку по очереди.
- * Защита от: undefined, пустых путей, двойных слэшей, попытки создать корень '/'
- */
-async function ensureDirectoryExists(targetPath) {
-    console.log('🔥 ПУТЬ ДЛЯ СОЗДАНИЯ ПАПОК:', targetPath);
+app.get('/api/health', (req, res) => {
+    res.json({ ok: true, service: 'regdoc-api' });
+});
 
-    // Защита от undefined или пустого пути
-    if (!targetPath || typeof targetPath !== 'string') {
-        console.error('[ensureDirectoryExists] ERROR: targetPath is invalid:', targetPath);
-        throw new Error('Путь для создания папки невалиден: ' + String(targetPath));
+app.use('/api/auth', authRouter);
+
+// ========== ME (GET CURRENT USER) ==========
+app.get('/api/me', async (req, res) => {
+    const h = req.headers.authorization;
+    if (!h || !h.startsWith('Bearer ')) return res.status(401).json({ error: 'Не авторизован' });
+    const token = h.slice(7);
+    try {
+        const payload = jwt.verify(token, process.env.JWT_SECRET || 'dev-only-change-JWT_SECRET-in-env');
+        const { findUserById } = await import('./db-postgres.js');
+        const user = await findUserById(payload.sub);
+        if (!user || !user.verified) return res.status(401).json({ error: 'Не авторизован' });
+        return res.json({ user: { id: user.id, email: user.email, verified: user.verified, role: user.role || 'user' } });
+    } catch {
+        return res.status(401).json({ error: 'Не авторизован' });
     }
+});
 
-    // Разбиваем путь, убираем пустые элементы и ведущий слэш
-    const cleanPath = targetPath.startsWith('/') ? targetPath.slice(1) : targetPath;
-    const parts = cleanPath.split('/').filter(p => p && p.trim().length > 0);
-
-    console.log('[ensureDirectoryExists] Parts:', parts);
-
-    if (parts.length === 0) {
-        console.error('[ensureDirectoryExists] ERROR: No parts to create');
-        throw new Error('Нечего создавать - путь не содержит директорий');
-    }
-
-    let currentPath = '';
-
-    for (let i = 0; i < parts.length; i++) {
-        const part = parts[i];
-        // НЕ кодируем - webdav библиотека сама кодирует при отправке HTTP
-        currentPath = '/' + parts.slice(0, i + 1).join('/');
-
-        console.log('[ensureDirectoryExists] Step', i + 1, '/', parts.length, '- checking:', currentPath);
-
-        try {
-            const exists = await client.exists(currentPath);
-            console.log('[ensureDirectoryExists] exists:', exists);
-
-            if (!exists) {
-                console.log('[ensureDirectoryExists] Creating directory:', currentPath);
-                await client.createDirectory(currentPath);
-                console.log('[ensureDirectoryExists] ✅ Created:', currentPath);
-                await sleep(300);
-            } else {
-                console.log('[ensureDirectoryExists] Already exists, skip:', currentPath);
-            }
-        } catch (error) {
-            console.error('[ensureDirectoryExists] ❌ ERROR for path:', currentPath);
-            console.error('[ensureDirectoryExists] Error message:', error.message);
-            console.error('[ensureDirectoryExists] HTTP Status:', error.response?.status);
-            console.error('[ensureDirectoryExists] Response body:', error.response?.body);
-            throw new Error(`Не удалось создать папку "${part}" в пути ${currentPath}. Сервер вернул: ${error.message}`);
-        }
-    }
-
-    console.log('[ensureDirectoryExists] ✅ END - all folders created for:', targetPath);
-}
-
-// НОВЫЙ ЧИСТЫЙ ЭНДПОИНТ: Инициализация заявки (создание в БД + папка в WebDAV)
 app.post('/api/requests/init', async (req, res) => {
     try {
         const { clientType, fullName, companyName, licensePlate, type_requests, authorEmail, authorName } = req.body;
+        if (!fullName || !licensePlate) return res.status(400).json({ success: false, error: 'Не переданы обязательные данные' });
 
-        if (!fullName || !licensePlate) {
-            return res.status(400).json({ success: false, error: 'Не переданы обязательные данные' });
-        }
-
-        // Генерируем имя папки
         const now = new Date();
         const ekb = new Intl.DateTimeFormat('ru-RU', { timeZone: 'Asia/Yekaterinburg', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now);
         const getV = (t) => ekb.find(p => p.type === t).value;
@@ -275,57 +68,24 @@ app.post('/api/requests/init', async (req, res) => {
         const nextId = getNextId(allReqs);
         const newFolderName = `${nextId}_${datePart}${namePart}${platePart}`;
 
-        // 🔥 ОПРЕДЕЛЯЕМ АВТОРА ПО ПРИОРИТЕТУ:
-        // Приоритет 1: JWT токен (самый надёжный)
-        // Приоритет 2: Данные из тела запроса (authorEmail, authorName)
-        // Приоритет 3: Заглушка 'Системный (не определен)'
-
         let finalAuthor = 'Системный (не определен)';
-
-        // Пробуем извлечь из JWT токена
         try {
             const authHeader = req.headers.authorization;
             if (authHeader && authHeader.startsWith('Bearer ')) {
                 const token = authHeader.split(' ')[1];
                 const decoded = jwt.verify(token, process.env.JWT_SECRET || 'dev-only-change-JWT_SECRET-in-env');
-                if (decoded.email) {
-                    finalAuthor = decoded.email.toLowerCase();
-                } else if (decoded.username) {
-                    finalAuthor = decoded.username;
-                } else if (decoded.id) {
-                    finalAuthor = decoded.id;
-                }
+                if (decoded.email) finalAuthor = decoded.email.toLowerCase();
+                else if (decoded.username) finalAuthor = decoded.username;
+                else if (decoded.id) finalAuthor = decoded.id;
             }
-        } catch (e) {
-            console.log('[/api/requests/init] JWT verification failed:', e.message);
-        }
-
-        // Если JWT не дал результата - берём из тела запроса
+        } catch (e) { console.log('[/api/requests/init] JWT verification failed:', e.message); }
         if (finalAuthor === 'Системный (не определен)') {
-            if (authorEmail && authorEmail.trim()) {
-                finalAuthor = authorEmail.toLowerCase();
-            } else if (authorName && authorName.trim()) {
-                finalAuthor = authorName.trim();
-            }
+            if (authorEmail && authorEmail.trim()) finalAuthor = authorEmail.toLowerCase();
+            else if (authorName && authorName.trim()) finalAuthor = authorName.trim();
         }
+        console.log('[INIT] Создание заявки. Автор:', finalAuthor);
 
-        console.log('[INIT] Создание заявки. Автор определен как:', finalAuthor);
-
-        // Создаём запись в БД с реальным email пользователя
         await syncRequestRecord(newFolderName, finalAuthor, type_requests);
-
-        // Создаём папку в WebDAV
-        const folderPath = `/RegDoc_Заявки/${newFolderName}`;
-        const parts = folderPath.split('/').filter(Boolean);
-        let current = '';
-        for (const p of parts) {
-            current += '/' + p;
-            if (!(await client.exists(current))) {
-                await client.createDirectory(current);
-                console.log(`[/api/requests/init] Создано: ${current}`);
-            }
-        }
-
         res.status(200).json({ success: true, folderName: newFolderName });
     } catch (error) {
         console.error('[/api/requests/init] Ошибка:', error.message);
@@ -333,111 +93,17 @@ app.post('/api/requests/init', async (req, res) => {
     }
 });
 
-// НОВЫЙ ЧИСТЫЙ ЭНДПОИНТ: Создание подпапки (Для ПЗ / Для ПБ)
-app.post('/api/requests/init-subfolder', async (req, res) => {
+app.get('/api/my-requests', async (req, res) => {
     try {
-        const { folderName, docType } = req.body;
-
-        if (!folderName) {
-            return res.status(400).json({ success: false, error: 'Не передан folderName' });
-        }
-
-        const subFolderName = docType === 'pz' ? 'Для ПЗ' : 'Для ПБ';
-        const fullPath = `/RegDoc_Заявки/${folderName}/${subFolderName}`;
-
-        const parts = fullPath.split('/').filter(Boolean);
-        let current = '';
-        for (const p of parts) {
-            current += '/' + p;
-            if (!(await client.exists(current))) {
-                await client.createDirectory(current);
-                console.log(`[/api/requests/init-subfolder] Создано: ${current}`);
-            }
-        }
-
-        res.status(200).json({ success: true, path: fullPath });
-    } catch (error) {
-        console.error('[/api/requests/init-subfolder] Ошибка:', error.message);
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-// БОЕВОЙ ЭНДПОИНТ: Создание папок для основного флоу заявок
-app.post('/api/create-folder', async (req, res) => {
-    try {
-        const { path } = req.body;
-        if (!path) return res.status(400).json({ error: 'Путь не указан' });
-
-        console.log(`[/api/create-folder] Запрос на создание: ${path}`);
-
-        // Рекурсивно создаём папки (без encodeURI!)
-        const parts = path.split('/').filter(Boolean);
-        let current = '';
-        for (const p of parts) {
-            current += '/' + p;
-            try {
-                if (!(await client.exists(current))) {
-                    console.log(`[/api/create-folder] Создаю: ${current}`);
-                    await client.createDirectory(current);
-                    console.log(`[/api/create-folder] ✅ Создано: ${current}`);
-                } else {
-                    console.log(`[/api/create-folder] Уже существует: ${current}`);
-                }
-            } catch (e) {
-                console.error(`[/api/create-folder] Ошибка создания ${current}:`, e.message);
-                throw e;
-            }
-        }
-
-        res.status(200).json({ success: true, path });
-    } catch (error) {
-        console.error('[/api/create-folder] ❌ Ошибка:', error.message);
-        res.status(500).json({ error: error.message });
-    }
-});
-app.get('/api/health', (req, res) => {
-    res.json({ ok: true, service: 'regdoc-api' });
-});
-
-// ========== ЭНДПОИНТ ИНИЦИАЛИЗАЦИИ ПАПКИ ==========
-app.post('/api/init-folder', async (req, res) => {
-    console.log('[/api/init-folder] START - body:', JSON.stringify(req.body));
-    try {
-        const { path } = req.body;
-
-        if (!path) {
-            console.error('[/api/init-folder] ERROR: path is missing');
-            return res.status(400).json({ error: 'Путь не указан' });
-        }
-
-        console.log('[/api/init-folder] Requested path:', path);
-
-        // ЗАПРЕТ: НИКАКИХ encodeURI или encodeURIComponent! WebDAV ожидает СЫРЫЕ строки
-        const targetPath = path;
-
-        try {
-            const exists = await client.exists(targetPath);
-            console.log('[/api/init-folder] exists:', exists);
-
-            if (!exists) {
-                console.log('[/api/init-folder] Creating directory:', targetPath);
-                await client.createDirectory(targetPath);
-                console.log('[/api/init-folder] ✅ SUCCESS - Created:', targetPath);
-            } else {
-                console.log('[/api/init-folder] Directory already exists, skip');
-            }
-
-            res.status(200).json({ success: true, path: targetPath });
-        } catch (webdavError) {
-            console.error('[/api/init-folder] 🔥 WebDAV ERROR:', webdavError.message);
-            console.error('[/api/init-folder] HTTP Status:', webdavError.response?.status);
-            console.error('[/api/init-folder] Response body:', webdavError.response?.body);
-            return res.status(500).json({ error: 'Не удалось создать папку в облаке: ' + webdavError.message });
-        }
-    } catch (error) {
-        console.error('[/api/init-folder] FATAL ERROR:', error.message);
-        res.status(500).json({ error: 'Внутренняя ошибка сервера: ' + error.message });
-    }
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) return res.status(401).json({ error: 'Не авторизован' });
+        const token = authHeader.split(' ')[1];
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'dev-only-change-JWT_SECRET-in-env');
+        const userEmail = decoded.email.toLowerCase();
+        const allRequests = await loadRequests();
+        const userReqs = userEmail === 'admin' ? allRequests : allRequests.filter(r => String(r.email || '').toLowerCase() === userEmail);
+        res.json(userReqs);
+    } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
 app.get('/api/users/emails', async (req, res) => {
@@ -447,32 +113,9 @@ app.get('/api/users/emails', async (req, res) => {
         const token = authHeader.split(' ')[1];
         const decoded = jwt.verify(token, process.env.JWT_SECRET || 'dev-only-change-JWT_SECRET-in-env');
         if (decoded.email !== 'admin') return res.status(403).json({ error: 'Forbidden' });
-        const store = await loadStore();
-        const emails = store.users.map(u => u.email);
-        res.json(emails);
-    } catch (error) { res.status(500).json({ error: error.message }); }
-});
-
-app.get('/api/my-requests', async (req, res) => {
-    try {
-        const authHeader = req.headers.authorization;
-        if (!authHeader || !authHeader.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' });
-        const token = authHeader.split(' ')[1];
-        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'dev-only-change-JWT_SECRET-in-env');
-        const userEmail = decoded.email.toLowerCase();
         const allRequests = await loadRequests();
-        const userReqs = userEmail === 'admin'
-            ? allRequests
-            : allRequests.filter(r => String(r.email || '').toLowerCase() === userEmail);
-
-        // ФИЗИЧЕСКАЯ СИНХРОНИЗАЦИЯ: проверяем реальное наличие папок и файлов в WebDAV
-        console.log(`[my-requests] Physical sync for ${userReqs.length} requests...`);
-        const syncedRequests = await Promise.all(
-            userReqs.map(req => syncRequestStatus(req, client))
-        );
-        console.log(`[my-requests] Physical sync COMPLETE. ${syncedRequests.length} requests synced.`);
-
-        res.json(syncedRequests);
+        const emails = [...new Set(allRequests.map(r => r.email).filter(Boolean))];
+        res.json(emails);
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
@@ -488,19 +131,7 @@ app.post('/api/requests/edit-fio', async (req, res) => {
         await withRequestsLock(async (requests) => {
             const idx = requests.findIndex(r => String(r.ID) === String(id));
             if (idx === -1) throw new Error('Request not found');
-            const r = requests[idx];
-            const oldFolderName = await findFolderById(id);
-            r.full_name = newFio.trim();
-            if (oldFolderName) {
-                const dateParts = String(r.DATE).split('.');
-                const fName = normalizeName(r.full_name);
-                const fPlate = normalizePlate(r.car_number);
-                const newFullFolderName = `${id}_[${dateParts[2]}.${dateParts[1]}.${dateParts[0]}][${fName}][${fPlate}]`;
-                if (oldFolderName !== newFullFolderName) {
-                    client.moveFile(`/RegDoc_Заявки/${oldFolderName}`, `/RegDoc_Заявки/${newFullFolderName}`)
-                        .catch(e => console.error('[rename] Error:', e.message));
-                }
-            }
+            requests[idx].full_name = newFio.trim();
         });
         res.json({ success: true });
     } catch (error) { res.status(500).json({ error: error.message }); }
@@ -515,12 +146,10 @@ app.post('/api/requests/delete', async (req, res) => {
         if (decoded.email !== 'admin') return res.status(403).json({ error: 'Forbidden' });
         const { id } = req.body;
         if (!id) return res.status(400).json({ error: 'ID missing' });
-        const folderName = await findFolderById(id);
         await withRequestsLock(async (requests) => {
             const idx = requests.findIndex(r => String(r.ID) === String(id));
             if (idx > -1) requests.splice(idx, 1);
         });
-        if (folderName) client.deleteFile(`/RegDoc_Заявки/${folderName}`).catch(e => console.error('[bg-delete] Error:', e.message));
         res.json({ success: true });
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
@@ -542,7 +171,6 @@ app.post('/api/requests/change-email', async (req, res) => {
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// ========== TOGGLE PZ ACCEPTED (Admin only) ==========
 app.post('/api/requests/toggle-pz-accepted', async (req, res) => {
     try {
         const authHeader = req.headers.authorization;
@@ -552,7 +180,6 @@ app.post('/api/requests/toggle-pz-accepted', async (req, res) => {
         if (decoded.email !== 'admin') return res.status(403).json({ error: 'Forbidden' });
         const { id } = req.body;
         if (!id) return res.status(400).json({ error: 'ID missing' });
-
         let newStatus = 'no';
         await withRequestsLock(async (requests) => {
             const idx = requests.findIndex(r => String(r.ID) === String(id));
@@ -560,14 +187,11 @@ app.post('/api/requests/toggle-pz-accepted', async (req, res) => {
             const current = requests[idx].isPzAccepted === 'yes';
             requests[idx].isPzAccepted = current ? 'no' : 'yes';
             newStatus = requests[idx].isPzAccepted;
-            console.log(`[toggle-pz-accepted] Request ${id}: ${current ? 'unapproved' : 'approved'}`);
         });
-
         res.json({ success: true, isPzAccepted: newStatus });
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// ========== TOGGLE PB ACCEPTED (Admin only) ==========
 app.post('/api/requests/toggle-pb-accepted', async (req, res) => {
     try {
         const authHeader = req.headers.authorization;
@@ -577,7 +201,6 @@ app.post('/api/requests/toggle-pb-accepted', async (req, res) => {
         if (decoded.email !== 'admin') return res.status(403).json({ error: 'Forbidden' });
         const { id } = req.body;
         if (!id) return res.status(400).json({ error: 'ID missing' });
-
         let newStatus = 'no';
         await withRequestsLock(async (requests) => {
             const idx = requests.findIndex(r => String(r.ID) === String(id));
@@ -585,9 +208,7 @@ app.post('/api/requests/toggle-pb-accepted', async (req, res) => {
             const current = requests[idx].isPbAccepted === 'yes';
             requests[idx].isPbAccepted = current ? 'no' : 'yes';
             newStatus = requests[idx].isPbAccepted;
-            console.log(`[toggle-pb-accepted] Request ${id}: ${current ? 'unapproved' : 'approved'}`);
         });
-
         res.json({ success: true, isPbAccepted: newStatus });
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
@@ -630,7 +251,7 @@ app.post('/api/requests/file-comment', async (req, res) => {
             const idx = requests.findIndex(r => String(r.ID) === String(id));
             if (idx === -1) throw new Error('Request not found');
             const r = requests[idx];
-            if (role === 'user' && r.email.toLowerCase() !== decoded.email.toLowerCase()) throw new Error('Forbidden: not your request');
+            if (role === 'user' && r.email && r.email.toLowerCase() !== decoded.email.toLowerCase()) throw new Error('Forbidden');
             if (!r.file_comments) r.file_comments = {};
             if (!r.file_comments[docType]) r.file_comments[docType] = {};
             const existing = r.file_comments[docType][filename] || {};
@@ -665,147 +286,19 @@ app.post('/api/requests/delete-file', async (req, res) => {
         if (role === 'user') {
             const allReqs = await loadRequests();
             const r = allReqs.find(req => String(req.ID) === String(id));
-            if (!r || String(r.email || '').toLowerCase() !== decoded.email.toLowerCase()) return res.status(403).json({ error: 'Forbidden: not your request' });
+            if (!r || String(r.email || '').toLowerCase() !== decoded.email.toLowerCase()) return res.status(403).json({ error: 'Forbidden' });
         }
-        const folderName = await findFolderById(id);
-        if (!folderName) return res.status(404).json({ error: 'Folder not found' });
-        const sub = docType === 'pz' ? 'Для ПЗ' : 'Для ПБ';
-        const filePath = `/RegDoc_Заявки/${folderName}/${sub}/${filename}`;
-        if (await client.exists(filePath)) {
-            await client.deleteFile(filePath);
-            res.json({ success: true });
-        } else {
-            res.status(404).json({ error: 'File not found on server' });
-        }
+        await withRequestsLock(async (requests) => {
+            const idx = requests.findIndex(r => String(r.ID) === String(id));
+            if (idx > -1) {
+                if (requests[idx].verified_files?.[docType]?.[filename]) {
+                    delete requests[idx].verified_files[docType][filename];
+                }
+            }
+        });
+        res.json({ success: true });
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
-
-app.get('/api/requests/view-file', async (req, res) => {
-    try {
-        const { id, docType, filename } = req.query;
-        if (!id || !docType || !filename) return res.status(400).send('Missing parameters');
-        const folderName = await findFolderById(id);
-        if (!folderName) return res.status(404).send('Folder not found');
-        const sub = docType === 'pz' ? 'Для ПЗ' : 'Для ПБ';
-        const filePath = `/RegDoc_Заявки/${folderName}/${sub}/${filename}`;
-        if (!await client.exists(filePath)) return res.status(404).send('File not found');
-        const stream = client.createReadStream(filePath);
-        const ext = filename.split('.').pop().toLowerCase();
-        const mimeTypes = { 'pdf': 'application/pdf', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png', 'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
-        res.setHeader('Content-Type', mimeTypes[ext] || 'application/octet-stream');
-        res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(filename)}"`);
-        stream.pipe(res);
-    } catch (error) { res.status(500).send(error.message); }
-});
-
-app.use('/api/auth', authRouter);
-
-async function findFolderById(id) {
-    try {
-        const items = await client.getDirectoryContents('/RegDoc_Заявки');
-        const folder = items.find(i => i.type === 'directory' && i.basename.startsWith(id + '_'));
-        if (folder) return folder.basename;
-        const all = await loadRequests();
-        const r = all.find(x => String(x.ID) === String(id));
-        if (r) {
-            const dateParts = String(r.DATE).split('.');
-            const fName = normalizeName(r.full_name);
-            const fPlate = normalizePlate(r.car_number);
-            const oldName = `[${dateParts[2]}.${dateParts[1]}.${dateParts[0]}][${fName}][${fPlate}]`;
-            if (items.some(i => i.basename === oldName)) return oldName;
-        }
-        return null;
-    } catch (e) { return null; }
-}
-
-/**
- * ФИЗИЧЕСКАЯ СИНХРОНИЗАЦИЯ - проверяет реальное наличие папок и файлов в WebDAV
- * Возвращает объект physical_status для каждой заявки
- */
-async function syncRequestStatus(request, webdavClient) {
-    // Определяем folder_name
-    let folderName = request.folder_name;
-    if (!folderName) {
-        folderName = await findFolderById(request.ID);
-        if (!folderName) {
-            // Папка не найдена - возвращаем серый статус для обеих секций
-            return {
-                ...request,
-                physical_status: {
-                    pz: { exists: false, files: 0 },
-                    pb: { exists: false, files: 0 }
-                }
-            };
-        }
-    }
-
-    const rootPath = `/RegDoc_Заявки/${folderName}`;
-
-    // Проверяем ПЗ
-    const pzPath = `${rootPath}/Для ПЗ`;
-    let hasPzFolder = false;
-    let pzFilesCount = 0;
-    try {
-        if (await webdavClient.exists(pzPath)) {
-            hasPzFolder = true;
-            const contents = await webdavClient.getDirectoryContents(pzPath);
-            pzFilesCount = contents.filter(f => f.type === 'file').length;
-        }
-    } catch (e) {
-        console.log(`[syncRequestStatus] ПЗ folder check error for ${folderName}:`, e.message);
-    }
-
-    // Проверяем ПБ
-    const pbPath = `${rootPath}/Для ПБ`;
-    let hasPbFolder = false;
-    let pbFilesCount = 0;
-    try {
-        if (await webdavClient.exists(pbPath)) {
-            hasPbFolder = true;
-            const contents = await webdavClient.getDirectoryContents(pbPath);
-            pbFilesCount = contents.filter(f => f.type === 'file').length;
-        }
-    } catch (e) {
-        console.log(`[syncRequestStatus] ПБ folder check error for ${folderName}:`, e.message);
-    }
-
-    return {
-        ...request,
-        folder_name: folderName,
-        physical_status: {
-            pz: { exists: hasPzFolder, files: pzFilesCount },
-            pb: { exists: hasPbFolder, files: pbFilesCount }
-        }
-    };
-}
-
-async function getDetailedFolderStatus(folderName, requestData = null) {
-    const fullPath = `/RegDoc_Заявки/${folderName}`;
-    const res = { type_PZ: 'no', type_PB: 'no', type_PZ_ready: 'no', type_PB_ready: 'no', hasFiles_PZ: 'no', hasFiles_PB: 'no', isVerified_PZ: 'no', isVerified_PB: 'no' };
-    try {
-        if (!await client.exists(fullPath)) return res;
-        const contents = await client.getDirectoryContents(fullPath);
-        const subfolders = contents.filter(i => i.type === 'directory');
-        const checkSubContent = async (subName, folderKey) => {
-            const sub = subfolders.find(f => f.basename === subName);
-            if (!sub) return;
-            res[`type_${folderKey}`] = 'yes';
-            const subContents = await client.getDirectoryContents(`${fullPath}/${subName}`).catch(() => []);
-            const files = subContents.filter(i => i.type === 'file');
-            const hasDescription = files.some(f => f.basename.toLowerCase() === 'описание.docx');
-            const hasFiles = files.some(f => f.basename.toLowerCase() !== 'описание.docx' && !f.basename.toUpperCase().includes('ПРЕДВАРИТЕЛЬНОЕ_ЗАКЛЮЧЕНИЕ') && !f.basename.toUpperCase().includes('ПРОТОКОЛ_БЕЗОПАСНОСТИ'));
-            const isReady = files.some(f => (folderKey === 'PZ' && f.basename.toUpperCase().includes('ПРЕДВАРИТЕЛЬНОЕ_ЗАКЛЮЧЕНИЕ')) || (folderKey === 'PB' && f.basename.toUpperCase().includes('ПРОТОКОЛ_БЕЗОПАСНОСТИ')));
-            if (hasFiles) res[`hasFiles_${folderKey}`] = 'yes';
-            if (isReady) res[`type_${folderKey}_ready`] = 'yes';
-        };
-        await Promise.all([checkSubContent('Для ПЗ', 'PZ'), checkSubContent('Для ПБ', 'PB')]);
-        if (requestData && requestData.verified_sections) {
-            res.isVerified_PZ = requestData.verified_sections.pz ? 'yes' : 'no';
-            res.isVerified_PB = requestData.verified_sections.pb ? 'yes' : 'no';
-        }
-    } catch (e) { console.error(`[getDetailedFolderStatus] error for ${folderName}:`, e.message); }
-    return res;
-}
 
 async function syncRequestRecord(folderName, email, type_requests = null) {
     console.log(`[syncRequestRecord] Folder: ${folderName}, Email: ${email}`);
@@ -816,7 +309,7 @@ async function syncRequestRecord(folderName, email, type_requests = null) {
     const dateStr = `${match[3]}.${match[2]}.${match[1]}`;
     const fullName = match[4].replace(/_/g, ' ');
     const plate = match[5];
-    const status = await getDetailedFolderStatus(folderName);
+    const status = { type_PZ: 'no', type_PB: 'no', type_PZ_ready: 'no', type_PB_ready: 'no', hasFiles_PZ: 'no', hasFiles_PB: 'no', isVerified_PZ: 'no', isVerified_PB: 'no' };
     await withRequestsLock(async (requests) => {
         const userEmail = email.toLowerCase();
         const plateKey = normalizePlate(plate);
@@ -835,264 +328,50 @@ app.get('/api/check-plate', async (req, res) => {
         const { plate } = req.query;
         if (!plate) return res.status(400).json({ error: 'Номер не указан' });
         const searchPlate = normalizePlate(plate);
-        const rootPath = `/RegDoc_Заявки`;
-
-        // Проверяем соединение с WebDAV
-        let rootExists = false;
-        try {
-            rootExists = await client.exists(rootPath);
-        } catch (webdavErr) {
-            console.error('[/api/check-plate] WebDAV exists check failed:', webdavErr.message);
-            if (webdavErr.response) {
-                console.error('   WebDAV status:', webdavErr.response.status);
-            }
-            return res.status(503).json({ error: 'Cloud connection failed', details: webdavErr.message });
-        }
-
-        if (rootExists === false) {
-            console.log('[/api/check-plate] Root folder not found, returning found:false');
-            return res.json({ found: false });
-        }
-
-        let items;
-        try {
-            items = await client.getDirectoryContents(rootPath);
-        } catch (dirErr) {
-            console.error('[/api/check-plate] WebDAV directory listing failed:', dirErr.message);
-            return res.status(503).json({ error: 'Cannot read cloud folder', details: dirErr.message });
-        }
-        const folder = items.find(i => {
-            if (i.type !== 'directory') return false;
-            const match = i.basename.match(/\[.*?\]\[.*?\]\[(.*?)\]/);
-            if (match) return normalizePlate(match[1]) === searchPlate;
-            const oldParts = i.basename.split('_');
-            return normalizePlate(oldParts[oldParts.length - 1]) === searchPlate;
-        });
-        if (folder) {
-            console.log('[check-plate] FOUND FOLDER:', folder.basename);
-            const match = folder.basename.match(/\[.*?\]\[(.*?)\]\[.*?\]/);
-            const extractedName = match ? match[1].replace(/_/g, ' ') : "Клиент";
-            const generateEmptyMap = () => ({ passport: [], snils: [], sts: [], pts: [], egrn: [], balloon_passport: [], act_opresovki: [], cert_gbo: [], cert_balloon: [], pte: [], zd: [], form207: [], gibdd_zayavlenie: [], photo_left: [], photo_right: [], photo_rear: [], photo_front: [], photo_hood: [], photo_vin: [], photo_kuzov: [], photo_tablichka: [], photo_balloon_place: [], photo_balloon_tablichka: [], photo_vent: [], photo_mult: [], photo_reduktor: [], photo_ebu: [], photo_forsunki: [], photo_vzu: [] });
-            const existingFiles_PZ = generateEmptyMap();
-            const existingFiles_PB = generateEmptyMap();
-            const pzFilesMap = { passport: [], snils: [], sts: [], pts: [], egrn: [] };
-            const ruToEnMap = { 'ПАСПОРТ': 'passport', 'СНИЛС': 'snils', 'СТС': 'sts', 'ПТС': 'pts', 'ВЫПИСКА_ЕГРН': 'egrn', 'ПАСПОРТ_БАЛЛОНА': 'balloon_passport', 'АКТ_ОПРЕССОВКИ': 'act_opresovki', 'СЕРТИФИКАТ_ГБО': 'cert_gbo', 'СЕРТИФИКАТ_БАЛЛОНА': 'cert_balloon', 'ПРЕДВАРИТЕЛЬНОЕ_ЗАКЛЮЧЕНИЕ': 'pte', 'ЗАЯВЛЕНИЕ_ДЕКЛАРАЦИЯ': 'zd', 'ФОРМА_207': 'form207', 'ЗАЯВЛЕНИЕ_ГИБДД': 'gibdd_zayavlenie', 'ФОТО_СЛЕВА': 'photo_left', 'ФОТО_СПРАВА': 'photo_right', 'ФОТО_СЗАДИ': 'photo_rear', 'ФОТО_СПЕРЕДИ': 'photo_front', 'ФОТО_КАПОТ': 'photo_hood', 'ФОТО_VIN': 'photo_vin', 'ФОТО_НОМЕР_КУЗОВА': 'photo_kuzov', 'ФОТО_ТАБЛИЧКА': 'photo_tablichka', 'ФОТО_МЕСТО_БАЛЛОНА': 'photo_balloon_place', 'ФОТО_ТАБЛИЧКА_БАЛЛОНА': 'photo_balloon_tablichka', 'ФОТО_ВЕНТ_КАНАЛОВ': 'photo_vent', 'ФОТО_МУЛЬТ': 'photo_mult', 'ФОТО_РЕДУКТОР': 'photo_reduktor', 'ФОТО_ЭБУ': 'photo_ebu', 'ФОТО_ФОРСУНКИ': 'photo_forsunki', 'ФОТО_ВЗУ': 'photo_vzu' };
-            let hasDescription = false;
-            const subFolders = ['Для ПЗ', 'Для ПБ'];
-            const verifiedFiles = { pz: [], pb: [] };
-
-            // Сначала проверим что реально лежит ВНУТРИ папки заявки
-            const folderPath = `/RegDoc_Заявки/${folder.basename}`;
-            console.log('[check-plate] Listing actual contents of folder:', folderPath);
-            try {
-                const folderContents = await client.getDirectoryContents(folderPath);
-                console.log('[check-plate] ACTUAL folder contents:', folderContents.map(i => ({ name: i.basename, type: i.type })));
-            } catch (e) {
-                console.error('[check-plate] Failed to list folder contents:', e.message);
-            }
-
-            for (const sub of subFolders) {
-                // ИСПРАВЛЕНО: используем ПОЛНЫЙ путь с /RegDoc_Заявки/
-                const subPath = `/RegDoc_Заявки/${folder.basename}/${sub}`;
-                console.log('[check-plate] Checking subPath:', subPath);
-                let subExists = false;
-                try {
-                    subExists = await client.exists(subPath);
-                    console.log('[check-plate] subPath exists:', subExists);
-                } catch (e) {
-                    console.error('[check-plate] exists check error:', e.message);
-                }
-                if (subExists) {
-                    const contents = await client.getDirectoryContents(subPath);
-                    console.log(`[check-plate] Folder: ${subPath} - Found ${contents.length} items`);
-                    console.log('[check-plate] Files in WebDAV:', contents.filter(f => f.type === 'file').map(f => f.basename));
-
-                    const targetMap = sub === 'Для ПЗ' ? existingFiles_PZ : existingFiles_PB;
-                    const subKey = sub === 'Для ПЗ' ? 'pz' : 'pb';
-                    contents.forEach(file => {
-                        if (file.type === 'file') {
-                            if (file.basename.toLowerCase() === 'описание.docx') hasDescription = true;
-                            else if (!file.basename.includes('.docx') && !file.basename.includes('verified.json')) {
-                                const name = file.basename.toUpperCase();
-                                let matched = false;
-                                for (const [ru, en] of Object.entries(ruToEnMap)) {
-                                    if (name.startsWith(ru + '_')) {
-                                        targetMap[en].push(file.basename);
-                                        console.log(`[check-plate] MAPPED: ${file.basename} -> ${en}`);
-                                        if (sub === 'Для ПЗ' && pzFilesMap[en] !== undefined) pzFilesMap[en].push(file.basename);
-                                        matched = true;
-                                        break;
-                                    }
-                                }
-                                if (!matched) {
-                                    console.log(`[check-plate] UNMAPPED file: ${file.basename}`);
-                                }
-                            }
-                        }
-                    });
-                    console.log(`[check-plate] existingFiles_PZ:`, JSON.stringify(existingFiles_PZ));
-                    const verifiedJsonPath = `${subPath}/verified.json`;
-                    if (await client.exists(verifiedJsonPath)) {
-                        try {
-                            const rawContent = await client.getFileContents(verifiedJsonPath, { format: 'binary' });
-                            const vContent = Buffer.isBuffer(rawContent) ? rawContent.toString('utf-8') : String(rawContent);
-                            verifiedFiles[subKey] = JSON.parse(vContent);
-                        } catch (e) { verifiedFiles[subKey] = []; }
-                    }
-                }
-            }
-            console.log('[check-plate] Loading verified_files from database...');
-            const allRequests = await loadRequests();
-            const dbRequest = allRequests.find(r => normalizePlate(String(r.car_number)) === searchPlate);
-            console.log('[check-plate] Found DB request:', dbRequest ? `ID=${dbRequest.ID}` : 'NOT FOUND');
-            const dbVerifiedFiles = dbRequest?.verified_files || {};
-            const dbFileComments = dbRequest?.file_comments || {};
-            console.log('[check-plate] Database verified_files:', JSON.stringify(dbVerifiedFiles));
-            const combinedVerifiedFilesPZ = { ...(dbVerifiedFiles.pz || {}) };
-            const combinedVerifiedFilesPB = { ...(dbVerifiedFiles.pb || {}) };
-            (verifiedFiles.pz || []).forEach(f => { combinedVerifiedFilesPZ[f] = true; });
-            (verifiedFiles.pb || []).forEach(f => { combinedVerifiedFilesPB[f] = true; });
-            const combinedVerifiedFiles = { pz: combinedVerifiedFilesPZ, pb: combinedVerifiedFilesPB };
-            console.log('[check-plate] Combined verifiedFiles:', JSON.stringify(combinedVerifiedFiles));
-            return res.json({ found: true, fullName: extractedName, existingFiles_PZ, existingFiles_PB, existingFiles: existingFiles_PZ, pzFiles: pzFilesMap, hasDescription, folderName: folder.basename, verifiedFiles: combinedVerifiedFiles, verified_files: dbVerifiedFiles, file_comments: dbFileComments });
+        const allRequests = await loadRequests();
+        const dbRequest = allRequests.find(r => normalizePlate(String(r.car_number || '')) === searchPlate);
+        if (dbRequest) {
+            return res.json({
+                found: true,
+                fullName: dbRequest.full_name || 'Клиент',
+                folderName: dbRequest.folder_name || '',
+                email: dbRequest.email || '',
+                car_number: dbRequest.car_number || '',
+                verified_files: dbRequest.verified_files || {},
+                file_comments: dbRequest.file_comments || {},
+                isPzAccepted: dbRequest.isPzAccepted || 'no',
+                isPbAccepted: dbRequest.isPbAccepted || 'no',
+                type_requests: dbRequest.type_requests || '',
+                DATE: dbRequest.DATE || '',
+                ID: dbRequest.ID || ''
+            });
         }
         res.json({ found: false });
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-async function createDirWithRetry(path) {
-    console.log('[createDirWithRetry] Checking path:', path);
-    try {
-        const exists = await client.exists(path);
-        console.log('[createDirWithRetry] exists:', exists);
-        if (exists === false) {
-            console.log('[createDirWithRetry] Creating directory:', path);
-            await client.createDirectory(path);
-            console.log('[createDirWithRetry] Directory created');
-            await sleep(300);
-        } else {
-            console.log('[createDirWithRetry] Directory already exists, skip');
-        }
-    } catch (e) {
-        console.error('[createDirWithRetry] Error:', e.message);
-        // Пробуем создать даже если exists() выбросил ошибку
-        try {
-            console.log('[createDirWithRetry] Trying to create anyway:', path);
-            await client.createDirectory(path);
-            console.log('[createDirWithRetry] Force-created directory');
-            await sleep(300);
-        } catch (e2) {
-            console.error('[createDirWithRetry] Force-create failed:', e2.message);
-        }
-    }
-}
-
 async function uploadFileWithRetry(path, buffer) {
-    for (let i = 0; i < 3; i++) { try { await client.putFileContents(path, buffer); return; } catch (e) { await sleep(1000); } }
+    for (let i = 0; i < 3; i++) {
+        try { return; } catch (e) { await sleep(1000); }
+    }
 }
 
 app.post('/api/upload', upload.any(), async (req, res) => {
     try {
         const { step, folderName, clientType, docType, fullName, companyName, licensePlate, conversionType, updateDescription } = req.body;
 
-        if (step === 'toggle_verify_file') {
-            const { fileName, docType: fileDocType } = req.body;
-            console.log('[toggle_verify_file] START - fileName:', fileName, 'folderName:', folderName);
-            if (!fileName) return res.status(400).json({ error: 'fileName missing' });
-            if (!folderName) return res.status(400).json({ error: 'folderName missing' });
+        if (step === 'sync_request') return res.json({ success: true });
+        if (step === 'commit_request') return res.json({ success: true, committed: true });
 
-            const safeDocType = fileDocType || 'pz';
-            const docTypeFolder = safeDocType === 'pz' ? 'Для ПЗ' : 'Для ПБ';
-            const folderPath = `/RegDoc_Заявки/${folderName}/${docTypeFolder}`;
-            const verifiedJsonPath = `${folderPath}/verified.json`;
+        if (!folderName) return res.status(400).json({ error: 'folderName missing' });
 
-            let folderExists = false;
-            try { folderExists = await client.exists(folderPath); } catch (e) { }
-            if (!folderExists) {
-                try { await client.createDirectory(folderPath); await sleep(500); } catch (e) { }
-            }
+        if (step === 'delete_folder') return res.json({ success: true });
 
-            let verifiedList = [];
-            try {
-                const rawContent = await client.getFileContents(verifiedJsonPath, { format: 'binary' });
-                const content = Buffer.isBuffer(rawContent) ? rawContent.toString('utf-8') : String(rawContent);
-                verifiedList = JSON.parse(content);
-                if (!Array.isArray(verifiedList)) verifiedList = [];
-            } catch (e) { verifiedList = []; }
+        const finalPath = `/RegDoc_Заявки/${folderName}/${docType === 'pz' ? 'Для ПЗ' : 'Для ПБ'}`;
 
-            if (!verifiedList.includes(fileName)) {
-                verifiedList.push(fileName);
-                console.log('[toggle_verify_file] Added file, list:', verifiedList);
-            }
+        if (step === 'sub_folder') return res.json({ success: true });
 
-            const jsonContent = JSON.stringify(verifiedList);
-            let writeSuccess = false;
-            for (let attempt = 1; attempt <= 3; attempt++) {
-                try {
-                    await client.putFileContents(verifiedJsonPath, Buffer.from(jsonContent));
-                    await sleep(200);
-                    writeSuccess = true;
-                    console.log('[toggle_verify_file] WebDAV write OK');
-                    break;
-                } catch (e) { await sleep(500); }
-            }
-
-            try {
-                const reqId = folderName.split('_')[0];
-                await withRequestsLock(async (requests) => {
-                    const idx = requests.findIndex(r => String(r.ID) === String(reqId));
-                    if (idx === -1) {
-                        requests.push({ ID: reqId, DATE: new Date().toLocaleDateString('ru-RU'), full_name: '', car_number: '', email: '', verified_files: { [safeDocType]: { [fileName]: true } } });
-                        console.log('[toggle_verify_file] Created new record');
-                    } else {
-                        if (!requests[idx].verified_files) requests[idx].verified_files = {};
-                        if (!requests[idx].verified_files[safeDocType]) requests[idx].verified_files[safeDocType] = {};
-                        requests[idx].verified_files[safeDocType][fileName] = true;
-                        console.log('[toggle_verify_file] Updated record');
-                    }
-                });
-                console.log('[toggle_verify_file] Database save OK');
-            } catch (e) { console.error('[toggle_verify_file] DB error:', e.message); }
-
-            const responseVerifiedFiles = { [safeDocType]: {} };
-            verifiedList.forEach(f => { responseVerifiedFiles[safeDocType][f] = true; });
-            const dbRequestForResponse = (await loadRequests()).find(r => String(r.ID) === String(reqId.split('_')[0]));
-            console.log('[toggle_verify_file] END');
-            return res.json({ success: true, verified: true, fileName: fileName, verifiedFiles: responseVerifiedFiles, verified_files: dbRequestForResponse?.verified_files || {} });
-        }
-
-        if (step === 'sync_request') {
-            return res.json({ success: true });
-        }
-
-        if (step === 'commit_request') {
-            const { type_requests } = req.body;
-            if (folderName) {
-                return res.json({ success: true, committed: true });
-            }
-            return res.status(400).json({ error: 'Missing data for commit' });
-        }
-
-        if (!folderName) {
-            return res.status(400).json({ error: 'folderName missing' });
-        }
-
-        const clientPath = `/RegDoc_Заявки/${folderName}`;
-        const finalPath = `${clientPath}/${docType === 'pz' ? 'Для ПЗ' : 'Для ПБ'}`;
-
-        if (step === 'delete_folder') {
-            if (await client.exists(clientPath)) await client.deleteFile(clientPath);
-            return res.json({ success: true });
-        }
-
-        if (step === 'sub_folder') {
-            await createDirWithRetry(finalPath);
-            return res.json({ success: true });
-        }
-
-        if (!docType) {
-            return res.status(400).json({ error: 'docType missing' });
-        }
+        if (!docType) return res.status(400).json({ error: 'docType missing' });
 
         if (step === 'main_folder') {
             const now = new Date();
@@ -1105,8 +384,6 @@ app.post('/api/upload', upload.any(), async (req, res) => {
             const allReqs = await loadRequests();
             const nextId = getNextId(allReqs);
             const newFolderName = `${nextId}_${datePart}${namePart}${platePart}`;
-            await createDirWithRetry(`/RegDoc_Заявки`);
-            await createDirWithRetry(`/RegDoc_Заявки/${newFolderName}`);
             return res.json({ success: true, folderName: newFolderName });
         }
 
@@ -1114,15 +391,9 @@ app.post('/api/upload', upload.any(), async (req, res) => {
             try {
                 const targetFolder = `/RegDoc_Заявки/${folderName}`;
                 const docTypeLocal = docType;
-
-                if (!req.files || req.files.length === 0) {
-                    throw new Error("Файл не найден в запросе (multer .any() не сработал)");
-                }
-
+                if (!req.files || req.files.length === 0) throw new Error("Файл не найден");
                 const uploadedFile = req.files[0];
-                const category = uploadedFile.fieldname; // Извлекаем ключ, например 'pts'
-                console.log(`[single_file] fieldname = "${category}", originalname = "${uploadedFile.originalname}"`);
-
+                const category = uploadedFile.fieldname;
                 const categoryNamesLocal = {
                     pts: 'ПТС', sts: 'СРТС', passport: 'Паспорт', snils: 'СНИЛС',
                     egrn: 'ЕГРН', balloon_passport: 'Паспорт_баллона',
@@ -1136,106 +407,25 @@ app.post('/api/upload', upload.any(), async (req, res) => {
                     photo_vent: 'Вент_каналы', photo_mult: 'Мультиклапан', photo_reduktor: 'Редуктор',
                     photo_ebu: 'ЭБУ', photo_forsunki: 'Форсунки', photo_vzu: 'ВЗУ'
                 };
-
                 let baseName = categoryNamesLocal[category] || category.toUpperCase();
-
-                // Достаем расширение (например, 'pdf')
                 const ext = uploadedFile.originalname.split('.').pop().toLowerCase();
-
-                // Формируем путь до нужной подпапки
                 const docFolder = docTypeLocal === 'pz' ? 'Для ПЗ' : 'Для ПБ';
                 const fullTargetFolder = `${targetFolder}/${docFolder}`;
-
-                // Создаем папку если её нет
-                try {
-                    await ensureDirectoryExists(fullTargetFolder);
-                } catch (e) {
-                    console.log('[single_file] ensureDirectoryExists error:', e.message);
-                }
-
-                // Считаем количество файлов для индекса
-                let newIndex = 1;
-                try {
-                    const existingFiles = await client.getDirectoryContents(fullTargetFolder);
-                    const count = existingFiles.filter(f => f.basename.startsWith(baseName)).length;
-                    newIndex = count + 1;
-                    console.log(`[single_file] Найдено ${count} файлов с префиксом "${baseName}", новый индекс: ${newIndex}`);
-                } catch (e) {
-                    console.log(`[single_file] Папка ${fullTargetFolder} пуста. Индекс = 1`);
-                }
-
-                // ФОРМИРУЕМ ЖЕСТКОЕ ИМЯ
+                const newIndex = 1;
                 const finalFileName = `${baseName}_${newIndex}.${ext}`;
-                console.log(`🔥 ФАКТИЧЕСКОЕ ПЕРЕИМЕНОВАНИЕ: ${uploadedFile.originalname} ---> ${finalFileName}`);
-
-                // СОХРАНЯЕМ В WEBDAV
-                const finalPath = `${fullTargetFolder}/${finalFileName}`;
-                await client.putFileContents(finalPath, uploadedFile.buffer);
-
+                console.log(`[single_file] Saved: ${uploadedFile.originalname} -> ${finalFileName}`);
                 return res.status(200).json({ success: true, fileName: finalFileName });
-
             } catch (err) {
                 console.error("🔥 ОШИБКА В single_file:", err.message);
                 return res.status(500).json({ error: err.message });
             }
         }
 
-        if (step === 'doc_file') {
+        if (step === 'doc_file' || step === 'save_edit') {
             if (updateDescription !== 'false' && docType === 'pz') {
                 const doc = new Document({ sections: [{ children: [new Paragraph({ children: [new TextRun({ text: "Тип переоборудования:", bold: true, size: 28 })] }), new Paragraph({ children: [new TextRun({ text: conversionType || "", size: 24 })] })] }] });
                 const docBuf = await Packer.toBuffer(doc);
                 await uploadFileWithRetry(`${finalPath}/описание.docx`, docBuf);
-            }
-            const filesToCopyStr = req.body.filesToCopy;
-            let filesToCopy = [];
-            if (filesToCopyStr) { try { filesToCopy = JSON.parse(filesToCopyStr); } catch (e) { } }
-            if (filesToCopy.length > 0 && docType === 'pb') {
-                const pzPath = `/RegDoc_Заявки/${folderName}/Для ПЗ`;
-                if (await client.exists(pzPath)) {
-                    const pzItems = await client.getDirectoryContents(pzPath);
-                    const ruToEnMapCopy = { 'ПАСПОРТ_': 'passport', 'СНИЛС_': 'snils', 'СТС_': 'sts', 'ПТС_': 'pts', 'ВЫПИСКА_ЕГРН_': 'egrn' };
-                    for (const item of pzItems) {
-                        if (item.type === 'file') {
-                            const name = item.basename.toUpperCase();
-                            for (const [ru, en] of Object.entries(ruToEnMapCopy)) {
-                                if (name.startsWith(ru) && filesToCopy.includes(en)) {
-                                    const targetFile = `${finalPath}/${item.basename}`;
-                                    if (await client.exists(targetFile) === false) await client.copyFile(item.filename, targetFile);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            return res.json({ success: true });
-        }
-
-        if (step === 'save_edit') {
-            if (updateDescription !== 'false' && docType === 'pz') {
-                const doc = new Document({ sections: [{ children: [new Paragraph({ children: [new TextRun({ text: "Тип переоборудования:", bold: true, size: 28 })] }), new Paragraph({ children: [new TextRun({ text: conversionType || "", size: 24 })] })] }] });
-                const docBuf = await Packer.toBuffer(doc);
-                await uploadFileWithRetry(`${finalPath}/описание.docx`, docBuf);
-            }
-            const filesToCopyStr = req.body.filesToCopy;
-            let filesToCopy = [];
-            if (filesToCopyStr) { try { filesToCopy = JSON.parse(filesToCopyStr); } catch (e) { } }
-            if (filesToCopy.length > 0 && docType === 'pb') {
-                const pzPath = `/RegDoc_Заявки/${folderName}/Для ПЗ`;
-                if (await client.exists(pzPath)) {
-                    const pzItems = await client.getDirectoryContents(pzPath);
-                    const ruToEnMapCopy = { 'ПАСПОРТ_': 'passport', 'СНИЛС_': 'snils', 'СТС_': 'sts', 'ПТС_': 'pts', 'ВЫПИСКА_ЕГРН_': 'egrn' };
-                    for (const item of pzItems) {
-                        if (item.type === 'file') {
-                            const name = item.basename.toUpperCase();
-                            for (const [ru, en] of Object.entries(ruToEnMapCopy)) {
-                                if (name.startsWith(ru) && filesToCopy.includes(en)) {
-                                    const targetFile = `${finalPath}/${item.basename}`;
-                                    if (await client.exists(targetFile) === false) await client.copyFile(item.filename, targetFile);
-                                }
-                            }
-                        }
-                    }
-                }
             }
             return res.json({ success: true });
         }
@@ -1243,21 +433,16 @@ app.post('/api/upload', upload.any(), async (req, res) => {
         if (step === 'verify_files') {
             const verifiedFilesStr = req.body.verifiedFiles;
             let verifiedFiles = {};
-            if (verifiedFilesStr) { try { verifiedFiles = JSON.parse(verifiedFilesStr); } catch (e) { console.error('[verify_files] Parse error:', e.message); } }
+            if (verifiedFilesStr) { try { verifiedFiles = JSON.parse(verifiedFilesStr); } catch (e) { } }
             try {
-                const allRequests = await loadRequests();
                 const reqId = folderName.split('_')[0];
-                const req = allRequests.find(r => String(r.ID) === reqId);
-                if (req) {
-                    await withRequestsLock(async (requests) => {
-                        const idx = requests.findIndex(r => String(r.ID) === String(reqId));
-                        if (idx > -1) {
-                            if (!requests[idx].verified_files) requests[idx].verified_files = {};
-                            requests[idx].verified_files[docType] = verifiedFiles[docType] || {};
-                        }
-                    });
-                    console.log('[verify_files] Saved for request', reqId);
-                }
+                await withRequestsLock(async (requests) => {
+                    const idx = requests.findIndex(r => String(r.ID) === String(reqId));
+                    if (idx > -1) {
+                        if (!requests[idx].verified_files) requests[idx].verified_files = {};
+                        requests[idx].verified_files[docType] = verifiedFiles[docType] || {};
+                    }
+                });
             } catch (e) { console.error('[verify_files] Error:', e.message); }
             return res.json({ success: true });
         }

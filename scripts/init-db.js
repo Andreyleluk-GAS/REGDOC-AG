@@ -1,58 +1,81 @@
-/**
- * One-time script to create the users table in PostgreSQL
- *
- * Usage:
- *   node scripts/init-db.js
- *
- * Prerequisites:
- *   1. Set up PostgreSQL database (Neon on Vercel or local Docker)
- *   2. Add DATABASE_URL to .env
- *   3. Run: npm install
- */
-
+// Загружаем переменные окружения современным способом
 import 'dotenv/config';
-import { initUsersTable } from '../api/db-postgres.js';
+import pg from 'pg';
+import bcrypt from 'bcrypt';
 
-async function init() {
-    console.log('===========================================');
-    console.log('  REGDOC: Initialize PostgreSQL Database');
-    console.log('===========================================');
-    console.log();
-    console.log('  Database URL:', process.env.DATABASE_URL
-        ? process.env.DATABASE_URL.replace(/:[^:@]+@/, ':***@')
-        : '❌ НЕ ЗАДАНА (проверь .env)');
-    console.log();
+const { Pool } = pg;
 
-    if (!process.env.DATABASE_URL) {
-        console.error('❌ DATABASE_URL не найдена в .env');
-        console.error('   Добавьте строку подключения к PostgreSQL');
-        process.exit(1);
+console.log('================================================');
+console.log('REGDOC: Инициализация базы данных PostgreSQL');
+console.log('================================================\n');
+
+// Проверяем, есть ли ссылка на базу данных
+if (!process.env.DATABASE_URL) {
+    console.error('❌ ОШИБКА: Переменная DATABASE_URL не найдена в файле .env');
+    console.error('Пожалуйста, добавьте строку подключения к вашей базе данных Neon.');
+    process.exit(1);
+}
+
+// Создаем пул соединений с базой данных
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+        rejectUnauthorized: false
     }
+});
 
+async function initializeDB() {
     try {
-        await initUsersTable();
-        console.log();
-        console.log('===========================================');
-        console.log('  ✅ Таблица users готова!');
-        console.log('===========================================');
-        console.log();
-        console.log('  Следующий шаг — перенести старых пользователей:');
-        console.log('  node scripts/migrate-users.js');
-        console.log();
-    } catch (e) {
-        console.error();
-        console.error('===========================================');
-        console.error('  ❌ ОШИБКА при создании таблицы');
-        console.error('===========================================');
-        console.error();
-        console.error('🔥 Подробности:', e.message);
-        console.error();
-        console.error('  Проверьте:');
-        console.error('  1. DATABASE_URL корректна');
-        console.error('  2. БД Neon / PostgreSQL доступна');
-        console.error('  3. SSL настроен (Neon требует rejectUnauthorized: false)');
-        process.exit(1);
+        console.log(`Подключение к БД: ${process.env.DATABASE_URL.split('@')[1].split('/')[0]}...`);
+        
+        // Тестовый запрос для проверки соединения
+        await pool.query('SELECT NOW()');
+        console.log('✅ Успешное подключение к PostgreSQL!\n');
+
+        console.log('Создание таблицы users...');
+
+        // SQL-запрос на создание таблицы
+        const createTableQuery = `
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                username VARCHAR(50) UNIQUE NOT NULL,
+                email VARCHAR(255) UNIQUE NOT NULL,
+                password_hash VARCHAR(255) NOT NULL,
+                role VARCHAR(20) DEFAULT 'user',
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+        `;
+
+        // Выполняем запрос
+        await pool.query(createTableQuery);
+        console.log('✅ Таблица users успешно создана (или уже существует).');
+
+        // Создаем тестового админа
+        const adminPasswordHash = await bcrypt.hash('admin123', 10);
+        
+        const createAdminQuery = `
+            INSERT INTO users (username, email, password_hash, role)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (username) DO NOTHING;
+        `;
+        
+        await pool.query(createAdminQuery, ['admin', 'admin@regdoc.ru', adminPasswordHash, 'admin']);
+        console.log('✅ Тестовый пользователь admin (пароль: admin123) добавлен.');
+
+    } catch (err) {
+        console.error('\n❌ ОШИБКА ПРИ ИНИЦИАЛИЗАЦИИ БД:');
+        console.error(err.message);
+        
+        if (err.message.includes('password authentication failed')) {
+             console.error('-> Проверьте логин или пароль в DATABASE_URL.');
+        } else if (err.message.includes('getaddrinfo ENOTFOUND')) {
+             console.error('-> Сервер базы данных не найден. Проверьте хост в DATABASE_URL.');
+        }
+    } finally {
+        // Обязательно закрываем пул соединений
+        await pool.end();
+        console.log('\nСкрипт завершен.');
     }
 }
 
-init();
+initializeDB();

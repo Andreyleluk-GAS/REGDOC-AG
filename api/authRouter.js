@@ -57,64 +57,6 @@ function signToken(user) {
   );
 }
 
-// ========== ASYNC BACKUP TO EXCEL (NON-BLOCKING) ==========
-// This runs AFTER successful registration, does NOT block the response
-async function backupUserToExcel(user) {
-  try {
-    const { createClient } = await import('webdav');
-    const XLSX = await import('xlsx');
-
-    const client = createClient('https://webdav.cloud.mail.ru/', {
-      username: process.env.VK_CLOUD_EMAIL,
-      password: process.env.VK_CLOUD_PASSWORD,
-    });
-
-    const USERS_FILE = '/RegDoc_Заявки/_USERS/users.xlsx';
-
-    // Check if file exists
-    let existingData = [];
-    if (await client.exists(USERS_FILE)) {
-      try {
-        const buffer = await client.getFileContents(USERS_FILE, { format: 'binary' });
-        const workbook = XLSX.read(buffer, { type: 'buffer' });
-        const sheet = workbook.Sheets[workbook.SheetNames[0]];
-        existingData = XLSX.utils.sheet_to_json(sheet, { defval: '' });
-      } catch (e) {
-        console.log('[backup-excel] Failed to read existing file:', e.message);
-      }
-    }
-
-    // Add new user to data
-    const newRow = {
-      id: user.id,
-      email: user.email,
-      username: user.username || '',
-      passwordHash: user.password_hash,
-      verified: user.verified ? 'TRUE' : 'FALSE',
-      verifyToken: user.verify_token || '',
-      verifyExpires: user.verify_expires || '',
-      createdAt: user.created_at
-    };
-
-    // Check for duplicates
-    if (!existingData.some(r => r.email === user.email)) {
-      existingData.push(newRow);
-    }
-
-    // Write back to WebDAV
-    const ws = XLSX.utils.json_to_sheet(existingData);
-    const newWb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(newWb, ws, 'Users');
-    const newBuffer = XLSX.write(newWb, { type: 'buffer', bookType: 'xlsx' });
-
-    await client.putFileContents(USERS_FILE, newBuffer);
-    console.log('[backup-excel] User backed up successfully:', user.email);
-  } catch (e) {
-    // NON-BLOCKING: Log but don't fail
-    console.error('[backup-excel] Failed to backup user:', e.message);
-  }
-}
-
 // ========== REGISTER ==========
 router.post('/register', async (req, res) => {
   try {
@@ -128,7 +70,6 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ error: 'Пароль не короче 8 символов' });
     }
 
-    // Check if email already exists in PostgreSQL
     const exists = await emailExists(email);
     if (exists) {
       return res.status(409).json({ error: 'Этот email уже зарегистрирован' });
@@ -140,20 +81,15 @@ router.post('/register', async (req, res) => {
     const verifyExpires = Date.now() + 48 * 60 * 60 * 1000;
     const verified = !smtpOn;
 
-    // Create user in PostgreSQL
     const user = await createUser({
       email,
-      username: email.split('@')[0], // Default username from email
+      username: email.split('@')[0],
       passwordHash,
       role: 'user',
       verified,
       verifyToken: smtpOn ? verifyToken : null,
       verifyExpires: smtpOn ? verifyExpires : null
     });
-
-    // NON-BLOCKING: Backup to Excel AFTER successful DB insert
-    // This ensures registration succeeds even if backup fails
-    backupUserToExcel(user);
 
     if (smtpOn) {
       try {
@@ -187,14 +123,12 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ error: 'Введите email и пароль' });
     }
 
-    // Look up user ONLY in PostgreSQL
     const user = await findUserByEmail(email);
 
     if (!user) {
       return res.status(401).json({ error: 'Неверный email или пароль' });
     }
 
-    // Verify password using bcrypt
     if (!bcrypt.compareSync(password, user.password_hash)) {
       return res.status(401).json({ error: 'Неверный email или пароль' });
     }
@@ -222,7 +156,6 @@ router.post('/verify-email', async (req, res) => {
 
     const user = await verifyUserByToken(token);
     if (!user) {
-      // Token not found or expired
       return res.status(400).json({ error: 'Ссылка недействительна или устарела' });
     }
 
