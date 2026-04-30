@@ -172,8 +172,8 @@ router.post('/register', async (req, res) => {
     const token = signToken(user);
     return res.json({ ok: true, needsVerification: false, token, user: publicUser(user) });
   } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error: 'Ошибка сервера' });
+    console.error("🔥 ОШИБКА РЕГИСТРАЦИИ:", e);
+    return res.status(500).json({ error: "Ошибка сервера: " + e.message });
   }
 });
 
@@ -209,8 +209,8 @@ router.post('/login', async (req, res) => {
     const token = signToken(user);
     return res.json({ ok: true, token, user: publicUser(user) });
   } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error: 'Ошибка сервера' });
+    console.error("🔥 ОШИБКА ЛОГИНА:", e);
+    return res.status(500).json({ error: "Ошибка сервера: " + e.message });
   }
 });
 
@@ -234,8 +234,8 @@ router.post('/verify-email', async (req, res) => {
       user: publicUser(user)
     });
   } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error: 'Ошибка сервера' });
+    console.error("🔥 ОШИБКА ПОДТВЕРЖДЕНИЯ EMAIL:", e);
+    return res.status(500).json({ error: "Ошибка сервера: " + e.message });
   }
 });
 
