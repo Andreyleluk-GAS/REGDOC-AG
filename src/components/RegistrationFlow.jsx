@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, ChevronRight, User, Briefcase, FileSignature, FileCheck2, Camera, Paperclip, Loader2, FileText, CheckCircle2, Save, RotateCw, History, PlusCircle, AlertCircle, Info, XCircle, MessageCircle, X, Trash2 } from 'lucide-react';
+import { Check, ChevronRight, User, Briefcase, FileSignature, FileCheck2, Camera, Paperclip, Loader2, FileText, CheckCircle2, Save, RotateCw, History, PlusCircle, AlertCircle, AlertTriangle, Info, XCircle, MessageCircle, X, Trash2 } from 'lucide-react';
 import imageCompression from 'browser-image-compression';
 import { authFetch } from '../lib/api.js';
 import { formatFIO } from '../lib/formatters.js';
@@ -437,8 +437,8 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
             if (xhr.status === 200) {
                 try {
                     const response = JSON.parse(xhr.responseText);
-                    // ИСПРАВЛЕНО: используем РЕАЛЬНОЕ имя файла с сервера (с timestamp)
-                    const realFileName = response.fileName || `${category.toUpperCase()}_${Date.now()}.${file.name.split('.').pop().toLowerCase()}`;
+                    // Используем красивое имя файла с сервера (ПТС_1.pdf, СРТС_2.jpg и т.д.)
+                    const realFileName = response.fileName || file.name;
 
                     setExistingCloudFiles(prev => {
                         const currentCatFiles = prev[docType][category] || [];
@@ -616,92 +616,80 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
     const isAnyFilePending = Object.values(fileStatuses).some(status => status.state === 'pending');
 
     const handleNextStep = async () => {
+        // Шаг 1 → Шаг 2
         if (currentStep === 1) { setCurrentStep(2); return; }
 
+        // Шаг 2 → Шаг 3: создаём заявку в БД и корневую папку WebDAV
         if (currentStep === 2) {
-            if (!formData.licensePlate.trim() || formData.licensePlate.length < 6) return showAlert("Ошибка", "Введите корректный гос. номер автомобиля", "error");
-            if (clientType === 'legal' && !formData.companyName) return showAlert("Внимание", "Пожалуйста, укажите название компании", "info");
-            if (!validateFullName(formData.fullName)) return showAlert("Неверный формат", "Заполните ФИО полностью на русском языке (как в паспорте)", "error");
+            if (!formData.licensePlate.trim() || formData.licensePlate.length < 6) return showAlert("Ошибка", "Введите номер", "error");
 
-            // Если папка ещё не создана - создаём её через /api/init-folder
             if (!activeFolderName) {
                 setIsSubmitting(true);
-                const data = new FormData();
-                data.append('step', 'main_folder');
-                data.append('clientType', clientType);
-                data.append('fullName', formData.fullName);
-                data.append('companyName', formData.companyName);
-                data.append('licensePlate', formData.licensePlate);
-                data.append('type_requests', getTypeRequests());
                 try {
-                    const res = await authFetch('/api/upload', { method: 'POST', body: data });
+                    // 🔥 ДИАГНОСТИКА: что реально есть у user
+                    console.log('DEBUG: Current user object:', user);
+
+                    // НОВЫЙ ЧИСТЫЙ JSON ЭНДПОИНТ (НЕ UPLOAD!)
+                    const res = await authFetch('/api/requests/init', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            clientType,
+                            fullName: formData.fullName,
+                            companyName: formData.companyName,
+                            licensePlate: formData.licensePlate,
+                            type_requests: getTypeRequests(),
+                            // 🔥 ПЕРЕДАЁМ АВТОРА РАЗНЫМИ ПОЛЯМИ:
+                            authorEmail: user?.email || '',
+                            authorName: user?.username || user?.name || ''
+                        })
+                    });
+
                     const json = await res.json();
-                    if (json.success && json.folderName) {
-                        const newFolderName = json.folderName;
+                    if (!res.ok || !json.success) throw new Error(json.error || "Ошибка инициализации");
 
-                        // СРАЗУ создаём папку на сервере через /api/init-folder
-                        console.log('[handleNextStep] Создаю главную папку:', newFolderName);
-                        const folderPath = `/RegDoc_Заявки/${newFolderName}`;
-                        const initRes = await authFetch('/api/init-folder', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ path: folderPath })
-                        });
-                        const initJson = await initRes.json();
-                        console.log('[handleNextStep] init-folder result:', initJson);
-
-                        if (initJson.success || initJson.error?.includes('already exists')) {
-                            setActiveFolderName(newFolderName);
-                            setIsSubmitting(false);
-                            setCurrentStep(3);
-                            return;
-                        } else {
-                            setIsSubmitting(false);
-                            return showAlert("Ошибка", initJson.error || "Не удалось создать папку в облаке", "error");
-                        }
-                    }
+                    setActiveFolderName(json.folderName);
+                    setCurrentStep(3);
                 } catch (e) {
+                    showAlert("Ошибка", e.message, "error");
+                } finally {
                     setIsSubmitting(false);
-                    return showAlert("Ошибка", "Не удалось создать папку на сервере", "error");
                 }
-                setIsSubmitting(false);
+                return;
             }
-
-            // Если папка уже есть - просто переходим
             setCurrentStep(3);
             return;
         }
 
+        // Шаг 3 → Шаг 4: создаём подпапку (Для ПЗ / Для ПБ) в WebDAV
         if (currentStep === 3) {
-            // Перед переходом к загрузке файлов - создаём подпапку Для ПЗ или Для ПБ
             if (activeFolderName) {
                 setIsSubmitting(true);
-                const subPath = `/RegDoc_Заявки/${activeFolderName}/${docType === 'pz' ? 'Для ПЗ' : 'Для ПБ'}`;
-                console.log('[handleNextStep] Создаю подпапку:', subPath);
                 try {
-                    const initRes = await authFetch('/api/init-folder', {
+                    // НОВЫЙ ЧИСТЫЙ JSON ЭНДПОИНТ (НЕ UPLOAD!)
+                    const res = await authFetch('/api/requests/init-subfolder', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ path: subPath })
+                        body: JSON.stringify({
+                            folderName: activeFolderName,
+                            docType: docType
+                        })
                     });
-                    const initJson = await initRes.json();
-                    console.log('[handleNextStep] init-folder sub result:', initJson);
 
-                    if (initJson.success || initJson.error?.includes('already exists')) {
-                        setIsSubmitting(false);
-                        setCurrentStep(4);
-                        return;
-                    } else {
-                        setIsSubmitting(false);
-                        return showAlert("Ошибка", initJson.error || "Не удалось создать раздел услуги в облаке", "error");
-                    }
+                    const json = await res.json();
+                    if (!res.ok || !json.success) throw new Error(json.error || "Ошибка создания подпапки");
+
+                    setCurrentStep(4);
                 } catch (e) {
+                    showAlert("Ошибка", e.message, "error");
+                } finally {
                     setIsSubmitting(false);
-                    return showAlert("Ошибка", "Не удалось создать раздел услуги", "error");
                 }
+                return;
             }
         }
 
+        // Шаг 4 → Шаг 5 или финал
         if (currentStep < 5) {
             setCurrentStep(prev => prev + 1);
         } else {
@@ -1084,22 +1072,26 @@ export default function RegistrationFlow({ editingRequest, user, onComplete }) {
                             });
                             const hasUnresolved = countUnresolved > 0;
 
-                            const btnClass = hasUnresolved && totalComments > 0
-                                ? 'bg-red-50 text-red-500 border border-red-200 hover:bg-red-100 hover:text-red-600'
-                                : (totalComments > 0 ? 'bg-regdoc-mist text-regdoc-teal border border-regdoc-cyan hover:bg-regdoc-cyan/20' : 'bg-white text-regdoc-navy/60 border border-regdoc-grey hover:border-regdoc-cyan hover:text-regdoc-cyan');
-
                             return (
                                 <button
                                     onClick={() => setRemarksModal({ show: true, adding: false, newText: '', category: null })}
-                                    className={`flex flex-col items-center gap-1 sm:gap-1.5 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl font-bold text-[10px] sm:text-[11px] transition-all tracking-wider shadow-sm uppercase outline-none shrink-0 ${btnClass}`}
+                                    className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5 transition-all shadow-sm outline-none shrink-0
+                                        ${hasUnresolved && totalComments > 0
+                                            ? (user?.email === 'admin' ? 'bg-regdoc-teal text-white hover:bg-regdoc-cyan animate-pulse' : 'bg-red-500 text-white hover:bg-red-600 animate-pulse')
+                                            : (totalComments > 0 ? 'bg-regdoc-mist text-regdoc-teal border border-regdoc-cyan hover:bg-regdoc-cyan/20' : 'bg-white text-regdoc-navy/50 border border-regdoc-grey hover:border-regdoc-cyan')}`}
                                 >
-                                    <div className="flex items-center gap-2">
-                                        <MessageCircle size={16} strokeWidth={2.5} /> Замечания
-                                        {countUnresolved > 0 && <span className="bg-red-500 text-white rounded-full px-2 py-0.5 text-[10px] leading-none">{countUnresolved}</span>}
-                                        {countUnresolved === 0 && totalComments > 0 && <CheckCircle2 size={16} className="text-regdoc-teal" />}
-                                    </div>
-                                    {user?.email === 'admin' && resolvedCount > 0 && (
-                                        <div className="text-[9px] text-regdoc-teal leading-tight capitalize-first px-2 rounded-md bg-white border border-regdoc-cyan/30 mt-0.5">Устранено: {resolvedCount}</div>
+                                    {hasUnresolved ? (
+                                        <>
+                                            <AlertTriangle size={12} strokeWidth={2.5} />
+                                            <span>ЗАМЕЧ.</span>
+                                            {countUnresolved > 0 && <span className="bg-white/20 rounded px-1.5 py-0.5">{countUnresolved}</span>}
+                                        </>
+                                    ) : (
+                                        <>
+                                            <MessageCircle size={14} strokeWidth={2} />
+                                            <span>ЗАМЕЧ.</span>
+                                            {totalComments > 0 && <CheckCircle2 size={12} className="text-regdoc-teal" />}
+                                        </>
                                     )}
                                 </button>
                             );

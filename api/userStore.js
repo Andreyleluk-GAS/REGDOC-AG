@@ -1,17 +1,9 @@
 import 'dotenv/config';
 import { createClient } from 'webdav';
 import * as XLSX from 'xlsx';
-import { getDb } from './db.js';
+import { query, emailExists, createUser } from './db-postgres.js';
 
-let queue = Promise.resolve();
-
-function getWebdavClient() {
-  return createClient('https://webdav.cloud.mail.ru/', {
-    username: process.env.VK_CLOUD_EMAIL,
-    password: process.env.VK_CLOUD_PASSWORD,
-  });
-}
-
+// Helper functions for parsing Excel data
 function normalizeEmail(email) {
   return String(email || '').trim().toLowerCase();
 }
@@ -39,24 +31,35 @@ function usersFromRows(rows) {
     .map((r) => ({
       id: String(r.id || '').trim(),
       email: normalizeEmail(r.email),
-      passwordHash: String(r.passwordHash || '').trim(),
+      passwordHash: String(r.passwordHash || r.password_hash || '').trim(),
       verified: coerceBool(r.verified),
       verifyToken: toStringOrNull(r.verifyToken),
       verifyExpires: toNumberOrNull(r.verifyExpires),
-      createdAt: String(r.createdAt || '').trim() || null,
+      createdAt: String(r.createdAt || r.created_at || '').trim() || null,
     }))
     .filter((u) => u.id && u.email && u.passwordHash);
 }
 
+/**
+ * Migrate users from WebDAV Excel to PostgreSQL (one-time startup migration)
+ * Checks if users already exist before migrating
+ */
 export async function migrateUsersFromWebdav() {
-  const db = await getDb();
-  const count = await db.get('SELECT COUNT(*) as c FROM users');
-  if (count.c > 0) return; // Already migrated
-
-  const client = getWebdavClient();
-  const USERS_FILE = '/RegDoc_Заявки/_USERS/users.xlsx';
-
   try {
+    // Check if we have users already in PostgreSQL
+    const result = await query('SELECT COUNT(*) as c FROM users');
+    if (result.rows[0].c > 0) {
+      console.log('[postgres] Users already exist, skipping WebDAV migration');
+      return;
+    }
+
+    const client = createClient('https://webdav.cloud.mail.ru/', {
+      username: process.env.VK_CLOUD_EMAIL,
+      password: process.env.VK_CLOUD_PASSWORD,
+    });
+
+    const USERS_FILE = '/RegDoc_Заявки/_USERS/users.xlsx';
+
     if (await client.exists(USERS_FILE)) {
       const buffer = await client.getFileContents(USERS_FILE);
       const workbook = XLSX.read(buffer, { type: 'buffer' });
@@ -64,57 +67,68 @@ export async function migrateUsersFromWebdav() {
       const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
       const users = usersFromRows(rows);
 
+      let migrated = 0;
       for (const u of users) {
-        await db.run(
-          'INSERT OR IGNORE INTO users (id, email, passwordHash, verified, verifyToken, verifyExpires, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)',
-          [u.id, u.email, u.passwordHash, u.verified ? 1 : 0, u.verifyToken, u.verifyExpires, u.createdAt]
-        );
+        try {
+          // Check if user already exists
+          const exists = await emailExists(u.email);
+          if (exists) continue;
+
+          // Create user with hashed password
+          const bcrypt = await import('bcryptjs');
+
+          // Check if password is already hashed
+          let passwordHash = u.passwordHash;
+          if (!passwordHash.startsWith('$2')) {
+            passwordHash = bcrypt.hashSync(passwordHash, 10);
+          }
+
+          await createUser({
+            email: u.email,
+            username: u.email.split('@')[0],
+            passwordHash,
+            role: 'user',
+            verified: u.verified,
+            verifyToken: u.verifyToken,
+            verifyExpires: u.verifyExpires
+          });
+          migrated++;
+        } catch (e) {
+          console.error(`[migrate] Error migrating user ${u.email}:`, e.message);
+        }
       }
-      console.log(`[db] Migrated ${users.length} users from WebDAV`);
+      console.log(`[postgres] Migrated ${migrated} users from WebDAV Excel`);
     }
   } catch (e) {
-    console.error('[db] Error migrating users:', e.message);
+    console.error('[postgres] Error in WebDAV migration:', e.message);
   }
 }
 
+/**
+ * Legacy function - kept for compatibility
+ * Loads users from PostgreSQL
+ */
 export async function loadStore() {
-  const db = await getDb();
-  const rows = await db.all('SELECT * FROM users');
-  const users = rows.map((r) => ({
+  const result = await query('SELECT * FROM users');
+  const users = result.rows.map((r) => ({
     ...r,
-    verified: r.verified === 1,
+    verified: r.verified === true || r.verified === 1 || r.verified === 'true',
+    passwordHash: r.password_hash
   }));
   return { version: 1, users };
 }
 
+/**
+ * Legacy function - kept for compatibility
+ * For new user operations, use db-postgres.js directly
+ */
 export async function withUsersLock(fn) {
-  const run = async () => {
-    const store = await loadStore();
-    if (!Array.isArray(store.users)) store.users = [];
+  const store = await loadStore();
+  if (!Array.isArray(store.users)) store.users = [];
 
-    await fn(store);
+  await fn(store);
 
-    const db = await getDb();
-    
-    // Вставка/обновление мутированных записей
-    for (const u of store.users) {
-      await db.run(`
-        INSERT INTO users (id, email, passwordHash, verified, verifyToken, verifyExpires, createdAt)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-          email=excluded.email,
-          passwordHash=excluded.passwordHash,
-          verified=excluded.verified,
-          verifyToken=excluded.verifyToken,
-          verifyExpires=excluded.verifyExpires,
-          createdAt=excluded.createdAt
-      `, [u.id, u.email, u.passwordHash, u.verified ? 1 : 0, u.verifyToken, u.verifyExpires, u.createdAt]);
-    }
-
-    return true;
-  };
-
-  const p = queue.then(run, run);
-  queue = p.catch(() => {});
-  return p;
+  // This is a no-op for PostgreSQL since we write directly
+  // Keeping for backwards compatibility
+  return true;
 }

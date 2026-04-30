@@ -51,8 +51,8 @@ export async function withRequestsLock(fn) {
     for (const r of rows) {
       if (!r.ID) r.ID = getNextId(rows);
       await db.run(`
-        INSERT INTO requests (ID, DATE, full_name, car_number, email, type_requests, type_PZ, type_PB, type_PZ_ready, type_PB_ready, hasFiles_PZ, hasFiles_PB, isVerified_PZ, isVerified_PB, verified_files, verified_sections, file_comments, folderName, isPzAccepted)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO requests (ID, DATE, full_name, car_number, email, type_requests, type_PZ, type_PB, type_PZ_ready, type_PB_ready, hasFiles_PZ, hasFiles_PB, isVerified_PZ, isVerified_PB, verified_files, verified_sections, file_comments, folderName, isPzAccepted, isPbAccepted)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(ID) DO UPDATE SET
           DATE=excluded.DATE,
           full_name=excluded.full_name,
@@ -71,14 +71,16 @@ export async function withRequestsLock(fn) {
           verified_sections=excluded.verified_sections,
           file_comments=excluded.file_comments,
           folderName=excluded.folderName,
-          isPzAccepted=excluded.isPzAccepted
+          isPzAccepted=excluded.isPzAccepted,
+          isPbAccepted=excluded.isPbAccepted
       `, [
         r.ID, r.DATE, r.full_name, r.car_number, r.email, r.type_requests, r.type_PZ, r.type_PB, r.type_PZ_ready, r.type_PB_ready, r.hasFiles_PZ, r.hasFiles_PB, r.isVerified_PZ, r.isVerified_PB,
         r.verified_files ? JSON.stringify(r.verified_files) : null,
         r.verified_sections ? JSON.stringify(r.verified_sections) : null,
         r.file_comments ? JSON.stringify(r.file_comments) : null,
         r.folderName,
-        r.isPzAccepted || 'no'
+        r.isPzAccepted || 'no',
+        r.isPbAccepted || 'no'
       ]);
     }
 

@@ -159,6 +159,46 @@ export function useRequests() {
     }
   }, [requests]);
 
+  /**
+   * Оптимистическое переключение статуса isPbAccepted.
+   * 1. Сразу меняем цвет плашки в UI
+   * 2. Отправляем запрос
+   * 3. Если ошибка — откатываем
+   */
+  const optimisticTogglePbAccepted = useCallback(async (req, onError) => {
+    const prevRequests = requests;
+    const currentStatus = req.isPbAccepted === 'yes';
+    // Optimistic update - инвертируем статус
+    setRequests(prev =>
+      prev.map(r =>
+        r.ID === req.ID
+          ? { ...r, isPbAccepted: currentStatus ? 'no' : 'yes' }
+          : r
+      )
+    );
+
+    try {
+      const res = await authFetch('/api/requests/toggle-pb-accepted', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: req.ID }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      // Синхронизируем с реальным статусом с сервера
+      setRequests(prev =>
+        prev.map(r =>
+          r.ID === req.ID
+            ? { ...r, isPbAccepted: data.isPbAccepted || (currentStatus ? 'no' : 'yes') }
+            : r
+        )
+      );
+    } catch (e) {
+      setRequests(prevRequests);
+      onError?.(e.message || 'Ошибка подтверждения ПБ');
+    }
+  }, [requests]);
+
   return {
     requests,
     loading,
@@ -169,5 +209,6 @@ export function useRequests() {
     optimisticEditFio,
     optimisticEditEmail,
     optimisticTogglePzAccepted,
+    optimisticTogglePbAccepted,
   };
 }

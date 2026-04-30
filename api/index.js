@@ -10,6 +10,21 @@ import { loadStore, migrateUsersFromWebdav } from './userStore.js';
 import { loadRequests, withRequestsLock, migrateLocalJsonToSQLite, isDuplicate, getNextId } from './requestsStore.js';
 import { normalizePlate, normalizeName } from './utils.js';
 
+// ========== СЛОВАРЬ КАТЕГОРИЙ ДЛЯ КРАСИВОГО ПЕРЕИМЕНОВАНИЯ ФАЙЛОВ ==========
+const categoryNames = {
+    pts: 'ПТС', sts: 'СРТС', passport: 'Паспорт', snils: 'СНИЛС',
+    egrn: 'ЕГРН', balloon_passport: 'Паспорт_баллона',
+    act_opresovki: 'Акт_опрессовки', cert_gbo: 'Сертификат_ГБО',
+    cert_balloon: 'Сертификат_баллона', pte: 'ПЗ', zd: 'Заявление_декларация',
+    form207: 'Форма_207', gibdd_zayavlenie: 'Заявление_в_ГИБДД',
+    photo_left: 'Фото_слева', photo_right: 'Фото_справа', photo_rear: 'Фото_сзади',
+    photo_front: 'Фото_спереди', photo_hood: 'Под_капотом', photo_vin: 'VIN',
+    photo_kuzov: 'Номер_кузова', photo_tablichka: 'Табличка',
+    photo_balloon_place: 'Место_баллона', photo_balloon_tablichka: 'Табличка_баллона',
+    photo_vent: 'Вент_каналы', photo_mult: 'Мультиклапан', photo_reduktor: 'Редуктор',
+    photo_ebu: 'ЭБУ', photo_forsunki: 'Форсунки', photo_vzu: 'ВЗУ'
+};
+
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
 app.use(cors());
@@ -239,6 +254,147 @@ async function ensureDirectoryExists(targetPath) {
     console.log('[ensureDirectoryExists] ✅ END - all folders created for:', targetPath);
 }
 
+// НОВЫЙ ЧИСТЫЙ ЭНДПОИНТ: Инициализация заявки (создание в БД + папка в WebDAV)
+app.post('/api/requests/init', async (req, res) => {
+    try {
+        const { clientType, fullName, companyName, licensePlate, type_requests, authorEmail, authorName } = req.body;
+
+        if (!fullName || !licensePlate) {
+            return res.status(400).json({ success: false, error: 'Не переданы обязательные данные' });
+        }
+
+        // Генерируем имя папки
+        const now = new Date();
+        const ekb = new Intl.DateTimeFormat('ru-RU', { timeZone: 'Asia/Yekaterinburg', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now);
+        const getV = (t) => ekb.find(p => p.type === t).value;
+        const datePart = `[${getV('year')}.${getV('month')}.${getV('day')}]`;
+        const rawName = clientType === 'legal' ? companyName : fullName;
+        const namePart = `[${normalizeName(rawName)}]`;
+        const platePart = `[${normalizePlate(licensePlate)}]`;
+        const allReqs = await loadRequests();
+        const nextId = getNextId(allReqs);
+        const newFolderName = `${nextId}_${datePart}${namePart}${platePart}`;
+
+        // 🔥 ОПРЕДЕЛЯЕМ АВТОРА ПО ПРИОРИТЕТУ:
+        // Приоритет 1: JWT токен (самый надёжный)
+        // Приоритет 2: Данные из тела запроса (authorEmail, authorName)
+        // Приоритет 3: Заглушка 'Системный (не определен)'
+
+        let finalAuthor = 'Системный (не определен)';
+
+        // Пробуем извлечь из JWT токена
+        try {
+            const authHeader = req.headers.authorization;
+            if (authHeader && authHeader.startsWith('Bearer ')) {
+                const token = authHeader.split(' ')[1];
+                const decoded = jwt.verify(token, process.env.JWT_SECRET || 'dev-only-change-JWT_SECRET-in-env');
+                if (decoded.email) {
+                    finalAuthor = decoded.email.toLowerCase();
+                } else if (decoded.username) {
+                    finalAuthor = decoded.username;
+                } else if (decoded.id) {
+                    finalAuthor = decoded.id;
+                }
+            }
+        } catch (e) {
+            console.log('[/api/requests/init] JWT verification failed:', e.message);
+        }
+
+        // Если JWT не дал результата - берём из тела запроса
+        if (finalAuthor === 'Системный (не определен)') {
+            if (authorEmail && authorEmail.trim()) {
+                finalAuthor = authorEmail.toLowerCase();
+            } else if (authorName && authorName.trim()) {
+                finalAuthor = authorName.trim();
+            }
+        }
+
+        console.log('[INIT] Создание заявки. Автор определен как:', finalAuthor);
+
+        // Создаём запись в БД с реальным email пользователя
+        await syncRequestRecord(newFolderName, finalAuthor, type_requests);
+
+        // Создаём папку в WebDAV
+        const folderPath = `/RegDoc_Заявки/${newFolderName}`;
+        const parts = folderPath.split('/').filter(Boolean);
+        let current = '';
+        for (const p of parts) {
+            current += '/' + p;
+            if (!(await client.exists(current))) {
+                await client.createDirectory(current);
+                console.log(`[/api/requests/init] Создано: ${current}`);
+            }
+        }
+
+        res.status(200).json({ success: true, folderName: newFolderName });
+    } catch (error) {
+        console.error('[/api/requests/init] Ошибка:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// НОВЫЙ ЧИСТЫЙ ЭНДПОИНТ: Создание подпапки (Для ПЗ / Для ПБ)
+app.post('/api/requests/init-subfolder', async (req, res) => {
+    try {
+        const { folderName, docType } = req.body;
+
+        if (!folderName) {
+            return res.status(400).json({ success: false, error: 'Не передан folderName' });
+        }
+
+        const subFolderName = docType === 'pz' ? 'Для ПЗ' : 'Для ПБ';
+        const fullPath = `/RegDoc_Заявки/${folderName}/${subFolderName}`;
+
+        const parts = fullPath.split('/').filter(Boolean);
+        let current = '';
+        for (const p of parts) {
+            current += '/' + p;
+            if (!(await client.exists(current))) {
+                await client.createDirectory(current);
+                console.log(`[/api/requests/init-subfolder] Создано: ${current}`);
+            }
+        }
+
+        res.status(200).json({ success: true, path: fullPath });
+    } catch (error) {
+        console.error('[/api/requests/init-subfolder] Ошибка:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// БОЕВОЙ ЭНДПОИНТ: Создание папок для основного флоу заявок
+app.post('/api/create-folder', async (req, res) => {
+    try {
+        const { path } = req.body;
+        if (!path) return res.status(400).json({ error: 'Путь не указан' });
+
+        console.log(`[/api/create-folder] Запрос на создание: ${path}`);
+
+        // Рекурсивно создаём папки (без encodeURI!)
+        const parts = path.split('/').filter(Boolean);
+        let current = '';
+        for (const p of parts) {
+            current += '/' + p;
+            try {
+                if (!(await client.exists(current))) {
+                    console.log(`[/api/create-folder] Создаю: ${current}`);
+                    await client.createDirectory(current);
+                    console.log(`[/api/create-folder] ✅ Создано: ${current}`);
+                } else {
+                    console.log(`[/api/create-folder] Уже существует: ${current}`);
+                }
+            } catch (e) {
+                console.error(`[/api/create-folder] Ошибка создания ${current}:`, e.message);
+                throw e;
+            }
+        }
+
+        res.status(200).json({ success: true, path });
+    } catch (error) {
+        console.error('[/api/create-folder] ❌ Ошибка:', error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
 app.get('/api/health', (req, res) => {
     res.json({ ok: true, service: 'regdoc-api' });
 });
@@ -308,7 +464,15 @@ app.get('/api/my-requests', async (req, res) => {
         const userReqs = userEmail === 'admin'
             ? allRequests
             : allRequests.filter(r => String(r.email || '').toLowerCase() === userEmail);
-        res.json(userReqs);
+
+        // ФИЗИЧЕСКАЯ СИНХРОНИЗАЦИЯ: проверяем реальное наличие папок и файлов в WebDAV
+        console.log(`[my-requests] Physical sync for ${userReqs.length} requests...`);
+        const syncedRequests = await Promise.all(
+            userReqs.map(req => syncRequestStatus(req, client))
+        );
+        console.log(`[my-requests] Physical sync COMPLETE. ${syncedRequests.length} requests synced.`);
+
+        res.json(syncedRequests);
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
@@ -400,6 +564,31 @@ app.post('/api/requests/toggle-pz-accepted', async (req, res) => {
         });
 
         res.json({ success: true, isPzAccepted: newStatus });
+    } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// ========== TOGGLE PB ACCEPTED (Admin only) ==========
+app.post('/api/requests/toggle-pb-accepted', async (req, res) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' });
+        const token = authHeader.split(' ')[1];
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'dev-only-change-JWT_SECRET-in-env');
+        if (decoded.email !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+        const { id } = req.body;
+        if (!id) return res.status(400).json({ error: 'ID missing' });
+
+        let newStatus = 'no';
+        await withRequestsLock(async (requests) => {
+            const idx = requests.findIndex(r => String(r.ID) === String(id));
+            if (idx === -1) throw new Error('Request not found');
+            const current = requests[idx].isPbAccepted === 'yes';
+            requests[idx].isPbAccepted = current ? 'no' : 'yes';
+            newStatus = requests[idx].isPbAccepted;
+            console.log(`[toggle-pb-accepted] Request ${id}: ${current ? 'unapproved' : 'approved'}`);
+        });
+
+        res.json({ success: true, isPbAccepted: newStatus });
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
@@ -509,32 +698,6 @@ app.get('/api/requests/view-file', async (req, res) => {
     } catch (error) { res.status(500).send(error.message); }
 });
 
-app.post('/api/auth/login', (req, res, next) => {
-    const { email, password } = req.body;
-    if (email === 'admin' && password === 'admin888') {
-        const token = jwt.sign({ id: 'admin', email: 'admin' }, process.env.JWT_SECRET || 'dev-only-change-JWT_SECRET-in-env');
-        return res.json({ token, user: { id: 'admin', email: 'admin', verified: true } });
-    }
-    if (email === 'test' && password === 'admin888') {
-        const token = jwt.sign({ id: 'test', email: 'test' }, process.env.JWT_SECRET || 'dev-only-change-JWT_SECRET-in-env');
-        return res.json({ token, user: { id: 'test', email: 'test', verified: true } });
-    }
-    next();
-});
-
-app.get('/api/auth/me', (req, res, next) => {
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-        try {
-            const token = authHeader.split(' ')[1];
-            const decoded = jwt.verify(token, process.env.JWT_SECRET || 'dev-only-change-JWT_SECRET-in-env');
-            if (decoded.email === 'admin') return res.json({ user: { id: 'admin', email: 'admin', verified: true } });
-            if (decoded.email === 'test') return res.json({ user: { id: 'test', email: 'test', verified: true } });
-        } catch (e) { }
-    }
-    next();
-});
-
 app.use('/api/auth', authRouter);
 
 async function findFolderById(id) {
@@ -553,6 +716,67 @@ async function findFolderById(id) {
         }
         return null;
     } catch (e) { return null; }
+}
+
+/**
+ * ФИЗИЧЕСКАЯ СИНХРОНИЗАЦИЯ - проверяет реальное наличие папок и файлов в WebDAV
+ * Возвращает объект physical_status для каждой заявки
+ */
+async function syncRequestStatus(request, webdavClient) {
+    // Определяем folder_name
+    let folderName = request.folder_name;
+    if (!folderName) {
+        folderName = await findFolderById(request.ID);
+        if (!folderName) {
+            // Папка не найдена - возвращаем серый статус для обеих секций
+            return {
+                ...request,
+                physical_status: {
+                    pz: { exists: false, files: 0 },
+                    pb: { exists: false, files: 0 }
+                }
+            };
+        }
+    }
+
+    const rootPath = `/RegDoc_Заявки/${folderName}`;
+
+    // Проверяем ПЗ
+    const pzPath = `${rootPath}/Для ПЗ`;
+    let hasPzFolder = false;
+    let pzFilesCount = 0;
+    try {
+        if (await webdavClient.exists(pzPath)) {
+            hasPzFolder = true;
+            const contents = await webdavClient.getDirectoryContents(pzPath);
+            pzFilesCount = contents.filter(f => f.type === 'file').length;
+        }
+    } catch (e) {
+        console.log(`[syncRequestStatus] ПЗ folder check error for ${folderName}:`, e.message);
+    }
+
+    // Проверяем ПБ
+    const pbPath = `${rootPath}/Для ПБ`;
+    let hasPbFolder = false;
+    let pbFilesCount = 0;
+    try {
+        if (await webdavClient.exists(pbPath)) {
+            hasPbFolder = true;
+            const contents = await webdavClient.getDirectoryContents(pbPath);
+            pbFilesCount = contents.filter(f => f.type === 'file').length;
+        }
+    } catch (e) {
+        console.log(`[syncRequestStatus] ПБ folder check error for ${folderName}:`, e.message);
+    }
+
+    return {
+        ...request,
+        folder_name: folderName,
+        physical_status: {
+            pz: { exists: hasPzFolder, files: pzFilesCount },
+            pb: { exists: hasPbFolder, files: pbFilesCount }
+        }
+    };
 }
 
 async function getDetailedFolderStatus(folderName, requestData = null) {
@@ -887,117 +1111,73 @@ app.post('/api/upload', upload.any(), async (req, res) => {
         }
 
         if (step === 'single_file') {
-            console.log('[upload:single_file] START - folderName:', folderName, 'docType:', docType);
-
-            // === ШАГ 1: Проверка Multer/парсера файлов ===
-            if (!req.files || req.files.length === 0) {
-                console.error('[upload:single_file] FATAL: No files in request!');
-                return res.status(400).json({ error: 'Файл не получен бэкендом. Проверьте форму загрузки.' });
-            }
-            const file = req.files[0];
-            console.log('[upload:single_file] File received:', {
-                fieldname: file.fieldname,
-                originalname: file.originalname,
-                size: file.size,
-                mimetype: file.mimetype,
-                bufferLength: file.buffer ? file.buffer.length : 'NO_BUFFER'
-            });
-
-            if (!file.buffer || file.buffer.length === 0) {
-                console.error('[upload:single_file] FATAL: Buffer is empty!');
-                return res.status(400).json({ error: 'Файл пустой или повреждён.' });
-            }
-
-            // === ШАГ 2: Проверка WebDAV авторизации ===
-            console.log('[upload:single_file] Checking WebDAV client...');
             try {
-                const testPath = '/RegDoc_Заявки';
-                const rootExists = await client.exists(testPath);
-                console.log('[upload:single_file] WebDAV auth OK - root exists:', rootExists);
-            } catch (authErr) {
-                console.error('[upload:single_file] WebDAV AUTH ERROR:', authErr.message);
-                console.error('[upload:single_file] WebDAV Status:', authErr.response?.status);
-                console.error('[upload:single_file] WebDAV Body:', authErr.response?.body);
-                return res.status(503).json({ error: 'Ошибка авторизации облака: ' + authErr.message });
-            }
+                const targetFolder = `/RegDoc_Заявки/${folderName}`;
+                const docTypeLocal = docType;
 
-            // === ШАГ 3: Создание папок (ensureDirectoryExists) ===
-            try {
-                console.log('[upload:single_file] Ensuring clientPath:', clientPath);
-                await ensureDirectoryExists(clientPath);
-                console.log('[upload:single_file] Ensuring finalPath:', finalPath);
-                await ensureDirectoryExists(finalPath);
-            } catch (ensureErr) {
-                console.error('[upload:single_file] FATAL: Failed to create directory structure:', ensureErr.message);
-                return res.status(500).json({ error: 'Ошибка создания папок: ' + ensureErr.message });
-            }
-
-            // === ШАГ 4: Генерация имени файла ===
-            const russianNames = { 'passport': 'ПАСПОРТ', 'snils': 'СНИЛС', 'sts': 'СТС', 'pts': 'ПТС', 'egrn': 'ВЫПИСКА_ЕГРН', 'balloon_passport': 'ПАСПОРТ_БАЛЛОНА', 'act_opresovki': 'АКТ_ОПРЕССОВКИ', 'cert_gbo': 'СЕРТИФИКАТ_ГБО', 'cert_balloon': 'СЕРТИФИКАТ_БАЛЛОНА', 'pte': 'ПРЕДВАРИТЕЛЬНОЕ_ЗАКЛЮЧЕНИЕ', 'zd': 'ЗАЯВЛЕНИЕ_ДЕКЛАРАЦИЯ', 'form207': 'ФОРМА_207', 'gibdd_zayavlenie': 'ЗАЯВЛЕНИЕ_ГИБДД', 'photo_left': 'ФОТО_СЛЕВА', 'photo_right': 'ФОТО_СПРАВА', 'photo_rear': 'ФОТО_СЗАДИ', 'photo_front': 'ФОТО_СПЕРЕДИ', 'photo_hood': 'ФОТО_КАПОТ', 'photo_vin': 'ФОТО_VIN', 'photo_kuzov': 'ФОТО_НОМЕР_КУЗОВА', 'photo_tablichka': 'ФОТО_ТАБЛИЧКА', 'photo_balloon_place': 'ФОТО_МЕСТО_БАЛЛОНА', 'photo_balloon_tablichka': 'ФОТО_ТАБЛИЧКА_БАЛЛОНА', 'photo_vent': 'ФОТО_ВЕНТ_КАНАЛОВ', 'photo_mult': 'ФОТО_МУЛЬТ', 'photo_reduktor': 'ФОТО_РЕДУКТОР', 'photo_ebu': 'ФОТО_ЭБУ', 'photo_forsunki': 'ФОТО_ФОРСУНКИ', 'photo_vzu': 'ФОТО_ВЗУ' };
-            const cat = russianNames[file.fieldname] || 'ФАЙЛ';
-
-            // Получаем список существующих файлов
-            let existingFileNames = [];
-            try {
-                const existingItems = await client.getDirectoryContents(finalPath);
-                existingFileNames = existingItems.filter(i => i.type === 'file').map(i => i.basename.toUpperCase());
-                console.log('[upload:single_file] Existing files:', existingFileNames);
-            } catch (e) {
-                console.log('[upload:single_file] Could not list dir:', e.message);
-            }
-
-            // Ищем максимальный номер
-            let maxNum = 0;
-            existingFileNames.forEach(name => {
-                if (name.startsWith(cat + '_')) {
-                    const parts = name.split('_');
-                    if (parts.length > 1) { const num = parseInt(parts[1]); if (!isNaN(num) && num > maxNum) maxNum = num; }
+                if (!req.files || req.files.length === 0) {
+                    throw new Error("Файл не найден в запросе (multer .any() не сработал)");
                 }
-            });
 
-            // Формируем новое имя файла (НЕ меняем оригинальное имя, только добавляем префикс)
-            const ext = file.originalname.split('.').pop().toLowerCase();
-            const uniqueId = Date.now();
-            const newFileName = `${cat}_${maxNum + 1}_${uniqueId}.${ext}`;
+                const uploadedFile = req.files[0];
+                const category = uploadedFile.fieldname; // Извлекаем ключ, например 'pts'
+                console.log(`[single_file] fieldname = "${category}", originalname = "${uploadedFile.originalname}"`);
 
-            // Убеждаемся что путь не содержит двойных слэшей
-            const targetPath = `${finalPath}/${newFileName}`.replace(/\/+/g, '/');
-            console.log('[upload:single_file] Target path (cleaned):', targetPath);
+                const categoryNamesLocal = {
+                    pts: 'ПТС', sts: 'СРТС', passport: 'Паспорт', snils: 'СНИЛС',
+                    egrn: 'ЕГРН', balloon_passport: 'Паспорт_баллона',
+                    act_opresovki: 'Акт_опрессовки', cert_gbo: 'Сертификат_ГБО',
+                    cert_balloon: 'Сертификат_баллона', pte: 'ПЗ', zd: 'Заявление_декларация',
+                    form207: 'Форма_207', gibdd_zayavlenie: 'Заявление_в_ГИБДД',
+                    photo_left: 'Фото_слева', photo_right: 'Фото_справа', photo_rear: 'Фото_сзади',
+                    photo_front: 'Фото_спереди', photo_hood: 'Под_капотом', photo_vin: 'VIN',
+                    photo_kuzov: 'Номер_кузова', photo_tablichka: 'Табличка',
+                    photo_balloon_place: 'Место_баллона', photo_balloon_tablichka: 'Табличка_баллона',
+                    photo_vent: 'Вент_каналы', photo_mult: 'Мультиклапан', photo_reduktor: 'Редуктор',
+                    photo_ebu: 'ЭБУ', photo_forsunki: 'Форсунки', photo_vzu: 'ВЗУ'
+                };
 
-            // === ШАГ 5: Загрузка с retry ===
-            let uploaded = false;
-            let lastError = null;
-            for (let attempt = 1; attempt <= 3; attempt++) {
+                let baseName = categoryNamesLocal[category] || category.toUpperCase();
+
+                // Достаем расширение (например, 'pdf')
+                const ext = uploadedFile.originalname.split('.').pop().toLowerCase();
+
+                // Формируем путь до нужной подпапки
+                const docFolder = docTypeLocal === 'pz' ? 'Для ПЗ' : 'Для ПБ';
+                const fullTargetFolder = `${targetFolder}/${docFolder}`;
+
+                // Создаем папку если её нет
                 try {
-                    console.log(`[upload:single_file] Uploading (attempt ${attempt}/3)...`);
-                    await client.putFileContents(targetPath, file.buffer);
-                    uploaded = true;
-                    console.log('[upload:single_file] ✅ SUCCESS on attempt', attempt, '- file:', newFileName);
-
-                    // Подтверждаем что файл загружен - проверяем его наличие
-                    const exists = await client.exists(targetPath);
-                    console.log('[upload:single_file] File exists after upload:', exists);
-                    break;
+                    await ensureDirectoryExists(fullTargetFolder);
                 } catch (e) {
-                    lastError = e;
-                    console.error(`[upload:single_file] ❌ Attempt ${attempt} FAILED:`, e.message);
-                    console.error('[upload:single_file] HTTP Status:', e.response?.status);
-                    console.error('[upload:single_file] Response body:', e.response?.body);
-                    if (attempt < 3) await sleep(500);
+                    console.log('[single_file] ensureDirectoryExists error:', e.message);
                 }
-            }
 
-            if (!uploaded) {
-                console.error('[upload:single_file] 💀 ALL ATTEMPTS FAILED');
-                console.error('[upload:single_file] Last error:', lastError?.message);
-                console.error('[upload:single_file] Last error status:', lastError?.response?.status);
-                return res.status(500).json({
-                    error: `Ошибка WebDAV: ${lastError?.message || 'Неизвестная ошибка'}`,
-                    details: lastError?.response?.body || lastError?.message
-                });
-            }
+                // Считаем количество файлов для индекса
+                let newIndex = 1;
+                try {
+                    const existingFiles = await client.getDirectoryContents(fullTargetFolder);
+                    const count = existingFiles.filter(f => f.basename.startsWith(baseName)).length;
+                    newIndex = count + 1;
+                    console.log(`[single_file] Найдено ${count} файлов с префиксом "${baseName}", новый индекс: ${newIndex}`);
+                } catch (e) {
+                    console.log(`[single_file] Папка ${fullTargetFolder} пуста. Индекс = 1`);
+                }
 
-            return res.json({ success: true, fileName: newFileName });
+                // ФОРМИРУЕМ ЖЕСТКОЕ ИМЯ
+                const finalFileName = `${baseName}_${newIndex}.${ext}`;
+                console.log(`🔥 ФАКТИЧЕСКОЕ ПЕРЕИМЕНОВАНИЕ: ${uploadedFile.originalname} ---> ${finalFileName}`);
+
+                // СОХРАНЯЕМ В WEBDAV
+                const finalPath = `${fullTargetFolder}/${finalFileName}`;
+                await client.putFileContents(finalPath, uploadedFile.buffer);
+
+                return res.status(200).json({ success: true, fileName: finalFileName });
+
+            } catch (err) {
+                console.error("🔥 ОШИБКА В single_file:", err.message);
+                return res.status(500).json({ error: err.message });
+            }
         }
 
         if (step === 'doc_file') {

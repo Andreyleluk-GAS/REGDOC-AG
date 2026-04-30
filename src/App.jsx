@@ -4,7 +4,7 @@ import RegdocLogo from './components/RegdocLogo';
 import RegdocIcon from './components/RegdocIcon';
 import LandingPage from './components/LandingPage';
 import EmailAuthForm from './components/EmailAuthForm';
-import { ShieldCheck, Loader2, FileText, CheckCircle2, AlertTriangle, Edit2, Check, Trash2, X, RefreshCw } from 'lucide-react';
+import { ShieldCheck, Loader2, FileText, CheckCircle2, AlertTriangle, Edit2, Check, Trash2, X, RefreshCw, ChevronRight } from 'lucide-react';
 import { useAuth } from './context/AuthContext.jsx';
 import { authFetch, getToken } from './lib/api.js';
 import { useRequests } from './lib/useRequests.js';
@@ -58,6 +58,7 @@ function App() {
     optimisticEditFio,
     optimisticEditEmail,
     optimisticTogglePzAccepted,
+    optimisticTogglePbAccepted,
   } = useRequests();
 
   const showToast = useCallback((message, type = 'error') => {
@@ -272,19 +273,23 @@ function App() {
                 <div className="space-y-3">
                   {[1, 2, 3].map(i => (
                     <div key={i} className="p-4 rounded-2xl border border-regdoc-grey bg-regdoc-grey/20 animate-pulse">
-                      <div className="flex justify-between items-center gap-4">
+                      <div className="flex justify-between items-start gap-4">
                         <div className="space-y-2">
                           <div className="h-5 w-32 bg-regdoc-grey rounded-lg" />
                           <div className="h-3 w-24 bg-regdoc-grey/60 rounded-lg" />
                         </div>
-                        <div className="flex flex-col gap-2 items-end">
-                          <div className="flex gap-2">
+                        <div className="flex flex-col gap-2 items-end shrink-0">
+                          <div className="flex items-center gap-3">
+                            <div className="w-20 h-[22px] bg-regdoc-grey/60 rounded" />
                             <div className="h-8 w-28 bg-regdoc-grey rounded-xl" />
-                            <div className="h-8 w-14 bg-regdoc-grey rounded-xl" />
+                            <div className="w-8 h-8 bg-regdoc-grey/60 rounded-full" />
+                            <div className="w-8 h-8 bg-regdoc-grey/60 rounded-full" />
                           </div>
-                          <div className="flex gap-2">
+                          <div className="flex items-center gap-3">
+                            <div className="w-20 h-[22px] bg-regdoc-grey/60 rounded" />
                             <div className="h-8 w-28 bg-regdoc-grey rounded-xl" />
-                            <div className="h-8 w-14 bg-regdoc-grey rounded-xl" />
+                            <div className="w-8 h-8 bg-regdoc-grey/60 rounded-full" />
+                            <div className="w-8 h-8 bg-regdoc-grey/60 rounded-full" />
                           </div>
                         </div>
                       </div>
@@ -320,8 +325,9 @@ function App() {
                     }
 
                     return (
-                      <div key={req.ID} className={`p-4 rounded-2xl border transition-all hover:shadow-sm ${reqActionNeeded ? (user?.email === 'admin' ? 'border-regdoc-cyan/30 bg-regdoc-mist' : 'border-red-200 bg-red-50') : 'border-regdoc-grey bg-regdoc-grey/20 hover:border-regdoc-cyan/30'}`}>
-                        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                      <div key={req.ID} className={`p-4 rounded-2xl border transition-all hover:shadow-sm ${reqActionNeeded ? (user?.email === 'admin' ? 'border-regdoc-cyan/30 bg-regdoc-mist' : 'border-red-200 bg-red-50/50') : 'border-regdoc-grey bg-regdoc-grey/20 hover:border-regdoc-cyan/30'}`}>
+                        <div className="flex flex-col sm:flex-row justify-between items-start gap-4">
+                          {/* ЛЕВАЯ ЧАСТЬ: ID, номер, ФИО */}
                           <div className="shrink-0 w-full sm:w-auto">
                             <div className="flex items-start justify-between sm:justify-start gap-4">
                               <div className="flex flex-col">
@@ -331,18 +337,11 @@ function App() {
                                 </div>
                               </div>
 
-                              <div className="flex items-center gap-2">
-                                {reqActionNeeded && (
-                                  <button onClick={() => cta.onEditRequest(req, actionDocType, 4)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl transition-all text-[10px] font-bold uppercase tracking-wider shadow-sm border ${user?.email === 'admin' ? 'bg-white border-regdoc-cyan/40 text-regdoc-teal hover:bg-regdoc-cyan/10' : 'bg-white border-red-300 text-red-600 hover:bg-red-50'}`}>
-                                    <AlertTriangle size={14} strokeWidth={2.5} /> {user?.email === 'admin' ? 'Новый ответ' : 'Устранить замечания'}
-                                  </button>
-                                )}
-                                {user?.email === 'admin' && (
-                                  <button onClick={() => setDeletingReq(req)} className="text-red-400 hover:text-red-500 transition-colors p-1" title="Удалить заявку">
-                                    <Trash2 size={16} />
-                                  </button>
-                                )}
-                              </div>
+                              {user?.email === 'admin' && (
+                                <button onClick={() => setDeletingReq(req)} className="text-red-400 hover:text-red-500 transition-colors p-1" title="Удалить заявку">
+                                  <Trash2 size={16} />
+                                </button>
+                              )}
                             </div>
 
                             <div className="flex items-center gap-2 mt-1">
@@ -404,90 +403,193 @@ function App() {
                                 )}
                               </div>
                             )}
-
                           </div>
-                          <div className="flex flex-col gap-2 w-full sm:w-auto items-end">
-                            <div className="flex gap-2 w-full sm:w-auto">
-                              {/* ПЛАШКА "ДОКУМЕНТЫ ПЗ" С ДИНАМИЧЕСКИМИ ЦВЕТАМИ И ГАЛОЧКОЙ АДМИНА */}
-                              {(() => {
-                                const isAccepted = req.isPzAccepted === 'yes';
-                                const isPzCreated = req.type_PZ === 'yes';
-                                const hasPzFiles = req.hasFiles_PZ === 'yes';
 
-                                // Определяем цвет плашки
-                                let badgeClass = 'border-gray-300 text-gray-400 bg-gray-50'; // СЕРАЯ - по умолчанию
-                                let iconColor = 'text-gray-400';
+                          {/* ПРАВАЯ ЧАСТЬ: ДВУХЭТАЖНЫЙ блок управления - ПРИЖАТ ВПРАВО */}
+                          <div className="flex flex-col gap-2 ml-auto shrink-0 items-end">
 
-                                if (isAccepted) {
-                                  badgeClass = 'border-green-500 text-green-600 bg-green-50'; // ЗЕЛЕНАЯ - принято админом
-                                  iconColor = 'text-green-500';
-                                } else if (isPzCreated) {
-                                  if (hasPzFiles) {
-                                    badgeClass = 'border-yellow-500 text-yellow-600 bg-yellow-50'; // ЖЕЛТАЯ - в процессе
-                                    iconColor = 'text-yellow-500';
-                                  } else {
-                                    badgeClass = 'border-red-500 text-red-500 bg-red-50'; // КРАСНАЯ - создана, но пустая
-                                    iconColor = 'text-red-400';
-                                  }
-                                }
-
-                                // Tooltip
-                                let tooltip = 'ПЗ еще не создана';
-                                if (isAccepted) tooltip = '✓ Принято администратором';
-                                else if (isPzCreated) {
-                                  if (hasPzFiles) tooltip = 'Документы загружены - ожидают проверки';
-                                  else tooltip = 'ПЗ создана, но документы не загружены';
-                                }
-
-                                return (
-                                  <div className="flex items-center gap-2">
+                            {/* ═══ СТРОКА ПЗ ═══ */}
+                            <div className="flex items-center gap-3">
+                              {/* Индикатор замечаний ПЗ - ВСЕГДА занимает место */}
+                              <div className="w-20 shrink-0 flex justify-center">
+                                {(() => {
+                                  const hasPzRemarks = req.file_comments?.pz && Object.values(req.file_comments.pz).some(cData =>
+                                    user?.email === 'admin' ? cData.expertUnread : (cData.status === 'needs_fix' && !cData.userReply)
+                                  );
+                                  return hasPzRemarks ? (
                                     <button
-                                      onClick={() => cta.onEditRequest(req, 'pz', req.type_PZ === 'yes' ? 4 : 3)}
-                                      title={tooltip}
-                                      className={`flex items-center justify-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 rounded-xl text-[9px] sm:text-[10px] font-bold uppercase tracking-wider border transition-all flex-1 sm:flex-none ${badgeClass}`}
+                                      onClick={() => cta.onEditRequest(req, 'pz', 4)}
+                                      className={`px-1.5 py-1 rounded text-[8px] font-bold uppercase tracking-wider flex items-center gap-0.5 animate-pulse transition-all shadow-sm w-20 justify-center
+                                        ${user?.email === 'admin' ? 'bg-regdoc-teal text-white hover:bg-regdoc-cyan' : 'bg-red-500 text-white hover:bg-red-600'}`}
                                     >
-                                      <CheckCircle2 size={12} className={`shrink-0 ${iconColor}`} />
-                                      {isAccepted && <Check size={10} className="shrink-0 text-green-500" strokeWidth={3} />}
-                                      <span className="whitespace-nowrap truncate">Документы ПЗ</span>
+                                      <AlertTriangle size={8} strokeWidth={2.5} />
+                                      ЗАМЕЧ
                                     </button>
-                                    {/* Галочка админа для подтверждения ПЗ */}
-                                    {user?.email === 'admin' && isPzCreated && (
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          optimisticTogglePzAccepted(req, (msg) => showToast(msg));
-                                        }}
-                                        title={isAccepted ? 'Отменить подтверждение ПЗ' : 'Подтвердить ПЗ (принято админом)'}
-                                        className={`p-1.5 rounded-lg border transition-all ${isAccepted
-                                            ? 'bg-green-100 border-green-400 text-green-600 hover:bg-green-200'
-                                            : 'bg-white border-gray-300 text-gray-400 hover:bg-green-50 hover:border-green-400 hover:text-green-600'
-                                          }`}
-                                      >
-                                        <Check size={14} strokeWidth={isAccepted ? 3 : 2} />
-                                      </button>
+                                  ) : (
+                                    <div className="w-20 h-[22px]" />
+                                  );
+                                })()}
+                              </div>
+
+                              {/* Фиксированная кнопка документа ПЗ */}
+                              <button
+                                onClick={() => cta.onEditRequest(req, 'pz', req.physical_status?.pz?.exists ? 4 : 3)}
+                                title={(() => {
+                                  const pzStatus = req.physical_status?.pz;
+                                  const isPzExists = pzStatus?.exists === true;
+                                  const hasPzFiles = (pzStatus?.files || 0) > 0;
+                                  const isAccepted = req.isPzAccepted === 'yes';
+                                  if (isAccepted) return '✓ Принято администратором';
+                                  if (isPzExists && hasPzFiles) return `Документы загружены (${pzStatus.files} файлов) - ожидают проверки`;
+                                  if (isPzExists && !hasPzFiles) return 'ПЗ создана, но папка пустая';
+                                  return 'ПЗ ещё не создана';
+                                })()}
+                                className={`w-28 shrink-0 flex items-center justify-center gap-1 px-2 py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wider border transition-all
+                                  ${req.isPzAccepted === 'yes' ? 'border-green-500 text-green-700 bg-green-100' :
+                                    req.physical_status?.pz?.exists && (req.physical_status?.pz?.files || 0) > 0 ? 'border-amber-400 text-amber-700 bg-amber-50' :
+                                      req.physical_status?.pz?.exists ? 'border-red-400 text-red-600 bg-red-50' :
+                                        'border-gray-200 text-gray-400 bg-gray-100'}`}
+                              >
+                                {req.isPzAccepted === 'yes' && <Check size={10} className="shrink-0 text-green-600" strokeWidth={3} />}
+                                <span>ПЗ</span>
+                              </button>
+
+                              {/* Галочка ПЗ - ВСЕГДА фиксированный контейнер */}
+                              <div className="w-8 h-8 shrink-0 flex items-center justify-center">
+                                {user?.email === 'admin' ? (
+                                  req.physical_status?.pz?.exists && (req.physical_status?.pz?.files || 0) > 0 ? (
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        optimisticTogglePzAccepted(req, (msg) => showToast(msg));
+                                      }}
+                                      title={req.isPzAccepted === 'yes' ? 'Отменить подтверждение ПЗ' : 'Подтвердить ПЗ'}
+                                      className={`w-8 h-8 rounded-full flex items-center justify-center transition-all
+                                        ${req.isPzAccepted === 'yes'
+                                          ? 'bg-green-500 text-white'
+                                          : 'bg-gray-100 border-2 border-dashed border-gray-300 text-gray-400 hover:border-green-400 hover:text-green-600'}`}
+                                    >
+                                      <Check size={12} strokeWidth={req.isPzAccepted === 'yes' ? 3 : 2} />
+                                    </button>
+                                  ) : (
+                                    <div className="w-8 h-8 rounded-full bg-gray-50 border border-gray-200 flex items-center justify-center">
+                                      <span className="text-[8px] text-gray-300">—</span>
+                                    </div>
+                                  )
+                                ) : (
+                                  <div className={`w-8 h-8 rounded-full flex items-center justify-center
+                                    ${req.isPzAccepted === 'yes' ? 'bg-green-100 text-green-600' :
+                                      req.physical_status?.pz?.exists && (req.physical_status?.pz?.files || 0) > 0 ? 'bg-amber-50 text-amber-400' :
+                                        'bg-gray-50 border border-gray-200 text-gray-300'}`}>
+                                    {req.isPzAccepted === 'yes' ? (
+                                      <Check size={11} strokeWidth={3} />
+                                    ) : (
+                                      <span className="text-[8px]">—</span>
                                     )}
                                   </div>
-                                );
-                              })()}
-                              <StatusBadge
-                                label="ПЗ"
-                                isGreen={isPZ_Ready}
-                                onClick={() => setActiveAlert(isPZ_Ready ? 'dev' : 'work')}
-                              />
+                                )}
+                              </div>
+
+                              {/* Кнопка входа → */}
+                              <button
+                                onClick={() => cta.onEditRequest(req, reqActionNeeded ? actionDocType : 'pz', 4)}
+                                className="p-2 border border-gray-200 rounded-full text-gray-400 hover:border-regdoc-cyan hover:text-regdoc-cyan transition-all"
+                                title="Открыть заявку"
+                              >
+                                <ChevronRight size={14} />
+                              </button>
                             </div>
-                            <div className="flex gap-2 w-full sm:w-auto">
-                              <StatusBadge
-                                label="Документы ПБ"
-                                isGreen={req.isVerified_PB === 'yes'}
-                                isAmber={req.type_PB === 'yes' && req.isVerified_PB !== 'yes'}
-                                onClick={() => cta.onEditRequest(req, 'pb', req.type_PB === 'yes' ? 4 : 3)}
-                                tooltip={req.isVerified_PB !== 'yes' ? (req.type_PB === 'yes' ? "Ожидает проверки" : "Не хватает документов") : "Проверено"}
-                              />
-                              <StatusBadge
-                                label="ПБ"
-                                isGreen={isPB_Ready}
-                                onClick={() => setActiveAlert(isPB_Ready ? 'dev' : 'work')}
-                              />
+
+                            {/* ═══ СТРОКА ПБ ═══ */}
+                            <div className="flex items-center gap-3">
+                              {/* Индикатор замечаний ПБ - ВСЕГДА занимает место */}
+                              <div className="w-20 shrink-0 flex justify-center">
+                                {(() => {
+                                  const hasPbRemarks = req.file_comments?.pb && Object.values(req.file_comments.pb).some(cData =>
+                                    user?.email === 'admin' ? cData.expertUnread : (cData.status === 'needs_fix' && !cData.userReply)
+                                  );
+                                  return hasPbRemarks ? (
+                                    <button
+                                      onClick={() => cta.onEditRequest(req, 'pb', 4)}
+                                      className={`px-1.5 py-1 rounded text-[8px] font-bold uppercase tracking-wider flex items-center gap-0.5 animate-pulse transition-all shadow-sm w-20 justify-center
+                                        ${user?.email === 'admin' ? 'bg-regdoc-teal text-white hover:bg-regdoc-cyan' : 'bg-red-500 text-white hover:bg-red-600'}`}
+                                    >
+                                      <AlertTriangle size={8} strokeWidth={2.5} />
+                                      ЗАМЕЧ
+                                    </button>
+                                  ) : (
+                                    <div className="w-20 h-[22px]" />
+                                  );
+                                })()}
+                              </div>
+
+                              {/* Фиксированная кнопка документа ПБ */}
+                              <button
+                                onClick={() => cta.onEditRequest(req, 'pb', req.physical_status?.pb?.exists ? 4 : 3)}
+                                title={(() => {
+                                  const pbStatus = req.physical_status?.pb;
+                                  const isPbExists = pbStatus?.exists === true;
+                                  const hasPbFiles = (pbStatus?.files || 0) > 0;
+                                  const isAccepted = req.isPbAccepted === 'yes';
+                                  if (isAccepted) return '✓ Принято администратором';
+                                  if (isPbExists && hasPbFiles) return `Документы загружены (${pbStatus.files} файлов) - ожидают проверки`;
+                                  if (isPbExists && !hasPbFiles) return 'ПБ создана, но папка пустая';
+                                  return 'ПБ ещё не создана';
+                                })()}
+                                className={`w-28 shrink-0 flex items-center justify-center gap-1 px-2 py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wider border transition-all
+                                  ${req.isPbAccepted === 'yes' ? 'border-green-500 text-green-700 bg-green-100' :
+                                    req.physical_status?.pb?.exists && (req.physical_status?.pb?.files || 0) > 0 ? 'border-amber-400 text-amber-700 bg-amber-50' :
+                                      req.physical_status?.pb?.exists ? 'border-red-400 text-red-600 bg-red-50' :
+                                        'border-gray-200 text-gray-400 bg-gray-100'}`}
+                              >
+                                {req.isPbAccepted === 'yes' && <Check size={10} className="shrink-0 text-green-600" strokeWidth={3} />}
+                                <span>ПБ</span>
+                              </button>
+
+                              {/* Галочка ПБ - ВСЕГДА фиксированный контейнер */}
+                              <div className="w-8 h-8 shrink-0 flex items-center justify-center">
+                                {user?.email === 'admin' ? (
+                                  req.physical_status?.pb?.exists && (req.physical_status?.pb?.files || 0) > 0 ? (
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        optimisticTogglePbAccepted(req, (msg) => showToast(msg));
+                                      }}
+                                      title={req.isPbAccepted === 'yes' ? 'Отменить подтверждение ПБ' : 'Подтвердить ПБ'}
+                                      className={`w-8 h-8 rounded-full flex items-center justify-center transition-all
+                                        ${req.isPbAccepted === 'yes'
+                                          ? 'bg-green-500 text-white'
+                                          : 'bg-gray-100 border-2 border-dashed border-gray-300 text-gray-400 hover:border-green-400 hover:text-green-600'}`}
+                                    >
+                                      <Check size={12} strokeWidth={req.isPbAccepted === 'yes' ? 3 : 2} />
+                                    </button>
+                                  ) : (
+                                    <div className="w-8 h-8 rounded-full bg-gray-50 border border-gray-200 flex items-center justify-center">
+                                      <span className="text-[8px] text-gray-300">—</span>
+                                    </div>
+                                  )
+                                ) : (
+                                  <div className={`w-8 h-8 rounded-full flex items-center justify-center
+                                    ${req.isPbAccepted === 'yes' ? 'bg-green-100 text-green-600' :
+                                      req.physical_status?.pb?.exists && (req.physical_status?.pb?.files || 0) > 0 ? 'bg-amber-50 text-amber-400' :
+                                        'bg-gray-50 border border-gray-200 text-gray-300'}`}>
+                                    {req.isPbAccepted === 'yes' ? (
+                                      <Check size={11} strokeWidth={3} />
+                                    ) : (
+                                      <span className="text-[8px]">—</span>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Кнопка входа → */}
+                              <button
+                                onClick={() => cta.onEditRequest(req, 'pb', 4)}
+                                className="p-2 border border-gray-200 rounded-full text-gray-400 hover:border-regdoc-cyan hover:text-regdoc-cyan transition-all"
+                                title="Открыть ПБ"
+                              >
+                                <ChevronRight size={14} />
+                              </button>
                             </div>
                           </div>
                         </div>

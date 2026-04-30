@@ -10,7 +10,8 @@
     "dev:all": "npm run dev",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "migrate:users": "node scripts/migrate-users.js"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.2",
@@ -25,6 +26,8 @@
     "lucide-react": "^0.577.0",
     "multer": "^2.1.1",
     "nodemailer": "^7.0.3",
+    "pg": "^8.20.0",
+    "pg-pool": "^3.13.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "sqlite": "^5.1.1",
