@@ -46,7 +46,6 @@ export async function withRequestsLock(fn) {
     const rows = await loadRequests();
     await fn(rows);
 
-    // Синхронизация обратно в SQLite
     const db = await getDb();
     for (const r of rows) {
       if (!r.ID) r.ID = getNextId(rows);
@@ -84,7 +83,6 @@ export async function withRequestsLock(fn) {
       ]);
     }
 
-    // Удаляем из базы те, которых больше нет в массиве
     const currentIds = rows.map(r => String(r.ID));
     const dbRows = await db.all('SELECT ID FROM requests');
     for (const dbRow of dbRows) {
@@ -104,10 +102,6 @@ export async function withRequestsLock(fn) {
 
 export function invalidateMemCache() {
   memCache = null;
-}
-
-export async function syncFolders(webdavClient) {
-  // Больше не блокируем UI проверкой тысяч папок. Все статусы обновляются асинхронно
 }
 
 export async function migrateLocalJsonToSQLite() {
@@ -134,37 +128,5 @@ export async function migrateLocalJsonToSQLite() {
     console.log(`[db] Migrated ${rows.length} requests from JSON to SQLite`);
   } catch (e) {
     console.error('[db] JSON migration error', e);
-  }
-}
-
-export async function migrateFromWebdav(webdavClient, remoteXlsxPath) {
-  // Оставлена заглушка, теперь миграция идет только из json в sqlite
-}
-
-export async function syncJsonToRemoteXlsx(webdavClient, remoteXlsxPath) {
-  try {
-    const rows = await loadRequests();
-    if (!rows || rows.length === 0) return;
-    const { default: XLSX } = await import('xlsx');
-
-    const excelRows = rows.map(r => ({
-      ID: r.ID || '',
-      DATE: r.DATE || '',
-      full_name: r.full_name || '',
-      car_number: r.car_number || '',
-      email: r.email || '',
-      type_requests: r.type_requests || '',
-      type_PZ: r.type_PZ || 'no',
-      type_PB: r.type_PB || 'no'
-    }));
-
-    const worksheet = XLSX.utils.json_to_sheet(excelRows);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Requests");
-
-    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
-    await webdavClient.putFileContents(remoteXlsxPath, buffer);
-  } catch (e) {
-    console.error(`[requestsStore] Ошибка фоновой синхронизации XLSX:`, e.message);
   }
 }
